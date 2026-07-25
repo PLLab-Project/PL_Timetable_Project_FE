@@ -34,6 +34,7 @@ const initialCourses = [
     day: 2,
     start: 0.5,
     span: 1.5,
+    color: "#E7C332",
     previewDays: [2, 3],
   },
   {
@@ -47,6 +48,7 @@ const initialCourses = [
     day: 3,
     start: 0.5,
     span: 1.5,
+    color: "#E7C332",
     previewDays: [3, 4],
   },
   {
@@ -131,18 +133,18 @@ function Timetable({ selectedIds, activeCourseId }) {
       {!previewCourse && selected.map((course, index) => (
         <div
           key={course.id}
-          className="absolute overflow-hidden px-1 py-1 text-[9px] font-medium leading-[1.25] text-white"
+          className="timetable-course-block absolute overflow-hidden p-[2px] text-[8px] font-medium leading-[1.15] text-white shadow-[inset_0_0_0_0.5px_#fff]"
           style={{
-            background: COLORS[index % COLORS.length],
+            background: course.color || COLORS[index % COLORS.length],
             left: `calc(13px + ${course.day} * ((100% - 13px) / 5))`,
             top: `calc(14px + ${course.start * 10}% - ${course.start * 1.4}px)`,
             width: "calc((100% - 13px) / 5)",
             height: `calc(${course.span * 10}% - ${course.span * 1.4}px)`,
           }}
         >
-          <p className="line-clamp-2 text-[10px] font-bold">{course.name}</p>
-          <p>{course.professor}</p>
-          <p className="truncate">{course.room}</p>
+          <p className="timetable-course-title line-clamp-2 text-[9px] font-bold leading-[1.15]">{course.name}</p>
+          <p className="timetable-course-professor mt-[3px]">{course.professor}</p>
+          <p className="timetable-course-room mt-[2px] break-all text-[8px] leading-[1.15]">{course.room}</p>
         </div>
       ))}
       {previewCourse &&

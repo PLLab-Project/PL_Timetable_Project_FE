@@ -182,6 +182,27 @@
     min-height: 0;
   }
 
+  .timetable-course-block {
+    padding: clamp(4px, 0.65vh, 6px);
+    font-size: clamp(12px, 1.5vh, 14px);
+    line-height: 1.15;
+  }
+
+  .timetable-course-title {
+    font-size: clamp(14px, 1.8vh, 16px);
+    line-height: 1.1;
+  }
+
+  .timetable-course-professor {
+    margin-top: clamp(4px, 0.55vh, 5px);
+  }
+
+  .timetable-course-room {
+    margin-top: clamp(3px, 0.45vh, 4px);
+    font-size: clamp(11px, 1.3vh, 13px);
+    line-height: 1.1;
+  }
+
   .course-sheet {
     position: relative;
     inset: auto;

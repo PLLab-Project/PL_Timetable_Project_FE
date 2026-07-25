@@ -368,13 +368,13 @@ function AutoSchedulePanel({ onClose, onGenerate }) {
 
   return (
     <div
-      className={`absolute inset-0 z-[60] bg-black/30 ${
+      className={`condition-panel-overlay absolute inset-0 z-[60] bg-black/30 ${
         closing ? "animate-timetable-backdrop-out" : "animate-timetable-backdrop"
       }`}
       onClick={() => closePanel()}
     >
       <aside
-        className={`absolute bottom-0 right-0 top-0 flex w-[330px] flex-col rounded-l-[17px] bg-white px-[14px] pb-7 pt-6 ${
+        className={`condition-panel-drawer absolute bottom-0 right-0 top-0 flex w-[330px] flex-col rounded-l-[17px] bg-white px-[14px] pb-7 pt-6 ${
           closing ? "animate-condition-panel-out" : "animate-condition-panel"
         }`}
         onClick={(event) => event.stopPropagation()}
@@ -1253,7 +1253,7 @@ export default function App() {
 
         {showComplete && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 px-[93px]">
-            <section className="w-full rounded-[15px] bg-white px-4 pt-7 text-center shadow-lg">
+            <section className="w-full max-w-[360px] rounded-[15px] bg-white px-4 pt-7 text-center shadow-lg">
               <p className="pb-5 text-[12px]">시간표 3개가 생성되었습니다.</p>
               <button
                 onClick={() => setShowComplete(false)}

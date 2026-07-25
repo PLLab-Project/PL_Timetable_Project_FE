@@ -238,6 +238,15 @@
     font-size: 11px;
   }
 
+  .condition-panel-drawer {
+    top: 24px;
+    right: max(28px, calc((100% - 1452px) / 2 + 28px));
+    bottom: 24px;
+    width: min(520px, calc(100% - 176px));
+    border: 1px solid #e1e1e1;
+    border-radius: 18px;
+  }
+
   .app-bottom-navigation {
     top: 24px;
     bottom: 24px;

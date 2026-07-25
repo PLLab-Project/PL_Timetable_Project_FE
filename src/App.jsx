@@ -32,7 +32,7 @@ const initialCourses = [
     meta: "전선　2학년　3학점　565017-01",
     note: "자격증(2학년) 우선수강/변경불가 14시 전체",
     day: 2,
-    start: 0,
+    start: 0.5,
     span: 1.5,
     previewDays: [2, 3],
   },
@@ -45,7 +45,7 @@ const initialCourses = [
     meta: "전선　2학년　3학점　565017-02",
     note: "자격증(2학년) 우선수강/변경불가 14시 전체",
     day: 3,
-    start: 0,
+    start: 0.5,
     span: 1.5,
     previewDays: [3, 4],
   },
@@ -58,7 +58,7 @@ const initialCourses = [
     meta: "전선　2학년　3학점　565017-03",
     note: "프로젝트 수업",
     day: 2,
-    start: 5,
+    start: 4,
     span: 2,
   },
   {
@@ -70,7 +70,7 @@ const initialCourses = [
     meta: "교선　1학년　2학점　510224-01",
     note: "노트북 지참",
     day: 1,
-    start: 3,
+    start: 2,
     span: 2,
   },
   {
@@ -82,7 +82,7 @@ const initialCourses = [
     meta: "교양　전체　2학점　420113-01",
     note: "온라인 병행",
     day: 0,
-    start: 6,
+    start: 5,
     span: 2,
   },
   {
@@ -94,7 +94,7 @@ const initialCourses = [
     meta: "전필　2학년　3학점　565101-01",
     note: "실습 중심",
     day: 4,
-    start: 7,
+    start: 6,
     span: 3,
   },
 ];
@@ -106,21 +106,24 @@ function Timetable({ selectedIds, activeCourseId }) {
   );
 
   return (
-    <div className="relative mt-1 h-[442px] overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white">
-      <div className="grid h-full grid-cols-[13px_repeat(5,1fr)]">
-        <div />
+    <div className="timetable-grid relative mt-1 h-[442px] overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white">
+      <div className="grid h-full grid-cols-[13px_repeat(5,1fr)] grid-rows-[14px_repeat(10,minmax(0,1fr))]">
+        <div className="border-b border-[#dedede]" />
         {DAYS.map((day) => (
-          <div key={day} className="border-l border-[#ededed] text-center text-[10px] text-[#999]">
+          <div key={day} className="border-b border-l border-[#dedede] text-center text-[10px] leading-[13px] text-[#999]">
             {day}
           </div>
         ))}
         {TIMES.map((time, row) => (
           <div key={time} className="contents">
-            <div className="border-t border-[#ededed] pr-0.5 pt-1 text-right text-[9px] text-[#999]">
+            <div className={`${row === 0 ? "" : "border-t"} border-[#ededed] pr-0.5 pt-1 text-right text-[9px] text-[#999]`}>
               {time}
             </div>
             {DAYS.map((day) => (
-              <div key={`${time}-${day}`} className="border-l border-t border-[#ededed]" />
+              <div
+                key={`${time}-${day}`}
+                className={`border-l ${row === 0 ? "" : "border-t"} border-[#ededed]`}
+              />
             ))}
           </div>
         ))}
@@ -132,9 +135,9 @@ function Timetable({ selectedIds, activeCourseId }) {
           style={{
             background: COLORS[index % COLORS.length],
             left: `calc(13px + ${course.day} * ((100% - 13px) / 5))`,
-            top: 36 + course.start * 42,
+            top: `calc(14px + ${course.start * 10}% - ${course.start * 1.4}px)`,
             width: "calc((100% - 13px) / 5)",
-            height: course.span * 42,
+            height: `calc(${course.span * 10}% - ${course.span * 1.4}px)`,
           }}
         >
           <p className="line-clamp-2 text-[10px] font-bold">{course.name}</p>
@@ -149,9 +152,9 @@ function Timetable({ selectedIds, activeCourseId }) {
             className="absolute bg-[#f1edff]"
             style={{
               left: `calc(13px + ${day} * ((100% - 13px) / 5))`,
-              top: 36 + previewCourse.start * 42,
+              top: `calc(14px + ${previewCourse.start * 10}% - ${previewCourse.start * 1.4}px)`,
               width: "calc((100% - 13px) / 5)",
-              height: previewCourse.span * 42,
+              height: `calc(${previewCourse.span * 10}% - ${previewCourse.span * 1.4}px)`,
             }}
           />
         ))}
@@ -221,7 +224,7 @@ function TimetableSheet({ onClose }) {
 
   return (
     <div
-      className={`absolute inset-0 z-40 bg-black/30 ${
+      className={`timetable-list-overlay absolute inset-0 z-40 bg-black/30 ${
         closing ? "animate-timetable-backdrop-out" : "animate-timetable-backdrop"
       }`}
       onClick={handleClose}
@@ -279,12 +282,17 @@ function Popover({
   onBack = onClose,
   selectedItems = [],
   top = 324,
+  anchor = null,
 }) {
   return (
     <div className="absolute inset-0 z-30" onClick={onClose}>
       <section
-        className="absolute left-1/2 w-[214px] -translate-x-1/2 overflow-hidden rounded-[15px] bg-[#d5d3d7]/95 text-center shadow-sm backdrop-blur"
-        style={{ top }}
+        className="absolute left-1/2 w-[214px] -translate-x-1/2 overflow-hidden rounded-[15px] bg-[rgba(205,203,208,0.82)] text-center shadow-sm backdrop-blur-[2px]"
+        style={
+          anchor
+            ? { top: anchor.top, left: anchor.left, transform: "none" }
+            : { top }
+        }
         onClick={(event) => event.stopPropagation()}
       >
         <button
@@ -544,7 +552,7 @@ function BottomNavigation({ active, onCourses, onTimetable }) {
     }`;
 
   return (
-    <nav className="absolute bottom-0 left-0 z-20 grid h-[54px] w-full grid-cols-3 border-t border-[#e5e5e5] bg-white">
+    <nav className="app-bottom-navigation absolute bottom-0 left-0 z-20 grid h-[54px] w-full grid-cols-3 border-t border-[#e5e5e5] bg-white">
       <button className={itemClass("courses")} onClick={onCourses}>
         <LayoutList size={17} /> 내 강의
       </button>
@@ -687,7 +695,7 @@ function GraduationModal({ onClose }) {
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 px-6" onClick={onClose}>
       <section
-        className="w-full rounded-[15px] bg-white px-6 pb-3 pt-7 shadow-lg"
+        className="w-full max-w-[354px] rounded-[15px] bg-white px-6 pb-3 pt-7 shadow-lg"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between text-[13px] font-bold">
@@ -774,8 +782,9 @@ function MyCoursesPage({ onTimetable }) {
   };
 
   return (
-    <main className="mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
-      <div className="relative h-full overflow-hidden px-[14px] pb-[54px] pt-6">
+    <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
+      <div className="my-courses-page relative h-full overflow-hidden">
+        <div className="my-courses-content no-scrollbar h-full overflow-y-auto px-[14px] pb-[80px] pt-6">
         <header className="flex items-center justify-between">
           <h1 className="text-[18px] font-bold">내가 들은 강의 입력</h1>
           <button
@@ -804,7 +813,7 @@ function MyCoursesPage({ onTimetable }) {
           <span className="h-px flex-1 bg-[#ededed]" />
         </div>
 
-        <div className="space-y-2">
+        <div className="course-form-list grid gap-2">
           {drafts.map((draft) => (
             <CourseInputForm
               key={draft.key}
@@ -819,7 +828,7 @@ function MyCoursesPage({ onTimetable }) {
           ))}
         </div>
 
-        <div className="no-scrollbar mt-2 max-h-[335px] space-y-2 overflow-y-auto">
+        <div className="saved-course-list no-scrollbar mt-2 max-h-[335px] space-y-2 overflow-y-auto">
           {courses.map((course) => (
             <article
               key={course.id}
@@ -859,10 +868,11 @@ function MyCoursesPage({ onTimetable }) {
               },
             ])
           }
-          className="mt-4 h-[46px] w-full rounded-[11px] border border-dashed border-brand text-[12px] font-semibold text-brand"
+          className="add-course-button mt-4 h-[46px] w-full rounded-[11px] border border-dashed border-brand text-[12px] font-semibold text-brand"
         >
           + 과목 추가
         </button>
+        </div>
 
         <BottomNavigation
           active="courses"
@@ -885,6 +895,7 @@ export default function App() {
   const [otherGrade, setOtherGrade] = useState(false);
   const [sort, setSort] = useState("");
   const [overlay, setOverlay] = useState(null);
+  const [filterAnchor, setFilterAnchor] = useState(null);
   const [showComplete, setShowComplete] = useState(false);
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const dragStartY = useRef(null);
@@ -925,6 +936,25 @@ export default function App() {
     setMajors((current) =>
       current.includes(value) ? current : [...current, value],
     );
+  };
+
+  const openFilter = (name, event) => {
+    if (window.innerWidth >= 1024) {
+      const layout = event.currentTarget.closest(".timetable-layout");
+      const layoutRect = layout?.getBoundingClientRect();
+      const buttonRect = event.currentTarget.getBoundingClientRect();
+      const relativeLeft = buttonRect.left - (layoutRect?.left || 0);
+      setFilterAnchor({
+        left: Math.max(
+          12,
+          Math.min(relativeLeft, (layoutRect?.width || window.innerWidth) - 226),
+        ),
+        top: buttonRect.bottom - (layoutRect?.top || 0) + 8,
+      });
+    } else {
+      setFilterAnchor(null);
+    }
+    setOverlay(name);
   };
 
   const gradeLabel = (() => {
@@ -981,9 +1011,9 @@ export default function App() {
   }
 
   return (
-    <main className="mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
-      <div className="relative h-full overflow-hidden">
-        <header className="px-[14px] pt-[10px]">
+    <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
+      <div className="timetable-layout relative h-full overflow-hidden">
+        <header className="timetable-header px-[14px] pt-[10px]">
           <div className="flex items-end justify-between">
             <div>
               <p className="text-[10px] text-[#a7a7a7]">2026-2학기</p>
@@ -1002,10 +1032,13 @@ export default function App() {
             selectedIds={selectedIds}
             activeCourseId={activeCourse}
           />
+          {overlay === "timetables" && (
+            <TimetableSheet onClose={() => setOverlay(null)} />
+          )}
         </header>
 
         <section
-          className="absolute bottom-[54px] left-0 right-0 z-10 flex rounded-t-[16px] border-t border-[#e1e1e1] bg-white pb-2 transition-[top] duration-300 ease-out"
+          className="course-sheet absolute bottom-[54px] left-0 right-0 z-10 flex rounded-t-[16px] border-t border-[#e1e1e1] bg-white pb-2 transition-[top] duration-300 ease-out"
           style={{ top: sheetExpanded ? "275px" : "509px" }}
         >
           <div className="flex min-h-0 w-full flex-col">
@@ -1028,7 +1061,7 @@ export default function App() {
           >
           <div className="no-scrollbar flex cursor-grab gap-2 overflow-x-auto pb-2 active:cursor-grabbing">
             <button
-              onClick={() => setOverlay("major-root")}
+              onClick={(event) => openFilter("major-root", event)}
               className="flex shrink-0 items-center gap-1 rounded-full border border-[#e9e9e9] bg-[#f7f7f7] px-2.5 py-1.5 text-[9px] text-[#999]"
             >
               전공/영역 <ChevronDown size={9} />
@@ -1048,7 +1081,7 @@ export default function App() {
               </button>
             ))}
             <button
-              onClick={() => setOverlay("grade")}
+              onClick={(event) => openFilter("grade", event)}
               className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-[9px] ${
                 grades.length || otherGrade ? "border-brand/20 bg-brand-soft text-brand" : "border-[#e9e9e9] bg-[#f7f7f7] text-[#999]"
               }`}
@@ -1068,7 +1101,7 @@ export default function App() {
               )}
             </button>
             <button
-              onClick={() => setOverlay("sort")}
+              onClick={(event) => openFilter("sort", event)}
               className="flex shrink-0 items-center gap-1 rounded-full border border-[#e9e9e9] bg-[#f7f7f7] px-2.5 py-1.5 text-[9px] text-[#999]"
             >
               {sort || "정렬"} <ChevronDown size={9} />
@@ -1111,11 +1144,11 @@ export default function App() {
           onTimetable={() => {}}
         />
 
-        {overlay === "timetables" && <TimetableSheet onClose={() => setOverlay(null)} />}
         {overlay === "major-root" && (
           <Popover
             title="전공/영역"
             top={236}
+            anchor={filterAnchor}
             items={[
               "교양 및 교직과목",
               "대순종대학",
@@ -1145,6 +1178,7 @@ export default function App() {
           <Popover
             title="교양 및 교직과목"
             top={355}
+            anchor={filterAnchor}
             items={["교양필수", "교양선택", "교직", "일반선택"]}
             onBack={() => setOverlay("major-root")}
             onSelect={(value) => {
@@ -1162,6 +1196,7 @@ export default function App() {
           <Popover
             title="교양선택"
             top={324}
+            anchor={filterAnchor}
             items={["인간과 소통", "사회와 경제", "과학과 기술", "예술과 문화", "융합과 혁신", "디지털리터러시"]}
             selectedItems={majors}
             onBack={() => setOverlay("major-type")}
@@ -1176,6 +1211,7 @@ export default function App() {
           <Popover
             title="학년"
             top={355}
+            anchor={filterAnchor}
             items={["1학년", "2학년", "3학년", "4학년", "기타"]}
             selectedItems={[
               ...grades.map((value) => `${value}학년`),
@@ -1195,6 +1231,7 @@ export default function App() {
           <Popover
             title="정렬"
             top={369}
+            anchor={filterAnchor}
             items={["기본순", "인기순", "이름순"]}
             selectedItems={[sort || "기본순"]}
             onSelect={(value) => {

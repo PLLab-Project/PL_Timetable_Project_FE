@@ -148,3 +148,145 @@
     transform: translateX(100%);
   }
 }
+
+@media (min-width: 1024px) {
+  .app-shell {
+    height: 100dvh;
+    max-width: none;
+    background: #f6f7fb;
+    box-shadow: none;
+  }
+
+  .timetable-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 760px) minmax(400px, 520px);
+    align-items: start;
+    justify-content: center;
+    gap: 24px;
+    padding: 24px 28px 24px 120px;
+  }
+
+  .timetable-header {
+    position: relative;
+    height: calc(100dvh - 48px);
+    min-width: 0;
+    overflow: hidden;
+    padding: 16px;
+    border: 1px solid #e1e1e1;
+    border-radius: 18px;
+    background: white;
+  }
+
+  .timetable-grid {
+    height: calc(100% - 38px);
+    min-height: 0;
+  }
+
+  .course-sheet {
+    position: relative;
+    inset: auto;
+    top: auto !important;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    height: calc(100dvh - 48px);
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid #e1e1e1;
+    border-radius: 18px;
+    background: white;
+  }
+
+  .course-sheet > div > div:first-child {
+    padding: 18px 16px 0;
+  }
+
+  .course-sheet > div > div:first-child button,
+  .course-sheet > div > div:first-child input {
+    font-size: 11px;
+  }
+
+  .course-sheet > div > div:first-child button {
+    min-height: 31px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .course-sheet > div > div:last-child {
+    gap: 10px;
+    padding: 0 16px 16px;
+  }
+
+  .course-sheet article {
+    height: 96px;
+    padding: 12px 14px;
+    border-radius: 15px;
+  }
+
+  .course-sheet article h3 {
+    font-size: 15px;
+    line-height: 18px;
+  }
+
+  .course-sheet article p {
+    font-size: 11px;
+    line-height: 14px;
+  }
+
+  .course-sheet article button,
+  .course-sheet article span {
+    font-size: 11px;
+  }
+
+  .app-bottom-navigation {
+    top: 24px;
+    bottom: 24px;
+    left: 24px;
+    width: 72px;
+    height: auto;
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(3, 88px);
+    align-content: start;
+    padding-top: 10px;
+    border: 1px solid #e5e5e5;
+    border-radius: 18px;
+    background: white;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 5%);
+  }
+
+  .my-courses-page {
+    padding-left: 120px;
+    background: #f6f7fb;
+  }
+
+  .my-courses-content {
+    width: min(960px, calc(100% - 48px));
+    height: calc(100dvh - 48px);
+    margin: 24px auto;
+    padding: 40px 44px 80px;
+    border: 1px solid #e1e1e1;
+    border-radius: 18px;
+    background: white;
+  }
+
+  .course-form-list {
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 14px;
+  }
+
+  .saved-course-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: none;
+    gap: 10px;
+    overflow: visible;
+  }
+
+  .saved-course-list > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0;
+  }
+
+  .add-course-button {
+    margin-bottom: 24px;
+  }
+}

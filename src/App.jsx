@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
   ChevronDown,
@@ -106,7 +106,7 @@ function Timetable({ selectedIds, activeCourseId }) {
   );
 
   return (
-    <div className="timetable-grid relative mt-1 h-[442px] overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white">
+    <div className="timetable-grid relative mt-2 h-[442px] overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white">
       <div className="grid h-full grid-cols-[13px_repeat(5,1fr)] grid-rows-[14px_repeat(10,minmax(0,1fr))]">
         <div className="border-b border-[#dedede]" />
         {DAYS.map((day) => (
@@ -579,14 +579,17 @@ const courseAreaOptions = [
   "전공선택",
   "교양필수",
   "교양선택",
+  "일반선택",
+  "교직",
+];
+
+const courseLiberalAreaOptions = [
   "인간과 소통",
   "사회와 경제",
   "과학과 기술",
   "예술과 문화",
   "융합과 혁신",
   "디지털리터러시",
-  "일반선택",
-  "교직",
 ];
 
 const courseCreditOptions = ["P/N", "1학점", "2학점", "3학점", "4학점"];
@@ -596,6 +599,28 @@ function CourseInputForm({ initial, onSave, onCancel }) {
   const [area, setArea] = useState(initial?.area || "");
   const [credits, setCredits] = useState(initial?.credits || "");
   const [openMenu, setOpenMenu] = useState(null);
+  const [showLiberalAreas, setShowLiberalAreas] = useState(
+    courseLiberalAreaOptions.includes(initial?.area),
+  );
+  const areaMenuRef = useRef(null);
+  const creditsMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!openMenu) return undefined;
+
+    const closeMenuOnOutsideClick = (event) => {
+      const activeMenuRef =
+        openMenu === "area" ? areaMenuRef.current : creditsMenuRef.current;
+
+      if (activeMenuRef && !activeMenuRef.contains(event.target)) {
+        setOpenMenu(null);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeMenuOnOutsideClick);
+    return () =>
+      document.removeEventListener("pointerdown", closeMenuOnOutsideClick);
+  }, [openMenu]);
 
   return (
     <section className="relative rounded-[13px] border border-[#e5e5e5] px-4 pb-2.5 pt-3">
@@ -611,36 +636,86 @@ function CourseInputForm({ initial, onSave, onCancel }) {
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-5">
-        <div className="relative">
+        <div ref={areaMenuRef} className="relative">
           <p className="text-[10px] text-[#777]">영역</p>
           <button
             type="button"
-            onClick={() => setOpenMenu(openMenu === "area" ? null : "area")}
+            onClick={() => {
+              if (openMenu === "area") {
+                setOpenMenu(null);
+                return;
+              }
+              setShowLiberalAreas(courseLiberalAreaOptions.includes(area));
+              setOpenMenu("area");
+            }}
             className={`flex h-[29px] w-full items-center justify-between border-b border-[#ddd] text-[13px] ${
               area ? "text-[#222]" : "text-[#999]"
             }`}
           >
-            {area || "영역 선택"} <ChevronDown size={10} />
+            {area || "영역 선택"}
+            {openMenu === "area" ? (
+              <ChevronUp size={10} />
+            ) : (
+              <ChevronDown size={10} />
+            )}
           </button>
           {openMenu === "area" && (
-            <div className="absolute left-0 top-[48px] z-30 max-h-[320px] w-full overflow-y-auto border border-[#d8d8d8] bg-[#f7f7f7]">
+            <div className="absolute left-0 top-full z-30 max-h-[320px] w-full overflow-y-auto border-x border-b border-[#d8d8d8] bg-white">
               {courseAreaOptions.map((option) => (
-                <button
-                  type="button"
-                  key={option}
-                  onClick={() => {
-                    setArea(option);
-                    setOpenMenu(null);
-                  }}
-                  className="block w-full px-1.5 py-1.5 text-left text-[12px] text-[#999] hover:bg-white"
-                >
-                  {option}
-                </button>
+                <Fragment key={option}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (option === "교양선택") {
+                        setShowLiberalAreas((current) => !current);
+                        return;
+                      }
+                      setArea(option);
+                      setOpenMenu(null);
+                    }}
+                    className={`flex w-full items-center justify-between px-1.5 py-1.5 text-left text-[12px] ${
+                      option === "교양선택" && showLiberalAreas
+                        ? "bg-white font-medium text-[#555] hover:bg-white"
+                        : area === option
+                          ? "font-medium text-[#222] hover:bg-[#f7f7f7]"
+                          : "text-[#999] hover:bg-[#f7f7f7]"
+                    }`}
+                  >
+                    <span>{option}</span>
+                    {option === "교양선택" &&
+                      (showLiberalAreas ? (
+                        <ChevronUp size={10} />
+                      ) : (
+                        <ChevronDown size={10} />
+                      ))}
+                  </button>
+                  {option === "교양선택" && showLiberalAreas && (
+                    <div className="bg-[#f3f3f3]">
+                      {courseLiberalAreaOptions.map((liberalArea) => (
+                        <button
+                          type="button"
+                          key={liberalArea}
+                          onClick={() => {
+                            setArea(liberalArea);
+                            setOpenMenu(null);
+                          }}
+                          className={`block w-full py-1.5 pl-3 pr-1.5 text-left text-[12px] hover:bg-[#e8e8e8] ${
+                            area === liberalArea
+                              ? "font-medium text-[#222]"
+                              : "text-[#999]"
+                          }`}
+                        >
+                          {liberalArea}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </Fragment>
               ))}
             </div>
           )}
         </div>
-        <div className="relative">
+        <div ref={creditsMenuRef} className="relative">
           <p className="text-[10px] text-[#777]">학점</p>
           <button
             type="button"
@@ -649,10 +724,15 @@ function CourseInputForm({ initial, onSave, onCancel }) {
               credits ? "text-[#222]" : "text-[#999]"
             }`}
           >
-            {credits || "학점 선택"} <ChevronDown size={10} />
+            {credits || "학점 선택"}
+            {openMenu === "credits" ? (
+              <ChevronUp size={10} />
+            ) : (
+              <ChevronDown size={10} />
+            )}
           </button>
           {openMenu === "credits" && (
-            <div className="absolute left-0 top-[48px] z-30 w-full border border-[#d8d8d8] bg-[#f7f7f7]">
+            <div className="absolute left-0 top-full z-30 w-full border-x border-b border-[#d8d8d8] bg-white">
               {courseCreditOptions.map((option) => (
                 <button
                   type="button"
@@ -661,7 +741,11 @@ function CourseInputForm({ initial, onSave, onCancel }) {
                     setCredits(option);
                     setOpenMenu(null);
                   }}
-                  className="block w-full px-1.5 py-1.5 text-left text-[12px] text-[#999] hover:bg-white"
+                  className={`block w-full px-1.5 py-1.5 text-left text-[12px] hover:bg-[#f7f7f7] ${
+                    credits === option
+                      ? "font-medium text-[#222]"
+                      : "text-[#999]"
+                  }`}
                 >
                   {option}
                 </button>
@@ -900,6 +984,7 @@ export default function App() {
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const dragStartY = useRef(null);
   const dragStartX = useRef(null);
+  const dragPointerId = useRef(null);
 
   const courses = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -965,45 +1050,106 @@ export default function App() {
   })();
 
   const startSheetDrag = (event) => {
+    if (event.pointerType === "touch") return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
     dragStartY.current = event.clientY;
+    dragStartX.current = event.clientX;
+    dragPointerId.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
   const endSheetDrag = (event) => {
-    if (dragStartY.current === null) return;
-    const distance = event.clientY - dragStartY.current;
-    if (distance < -45) setSheetExpanded(true);
-    if (distance > 45) setSheetExpanded(false);
+    if (dragStartY.current !== null && dragStartX.current !== null) {
+      const distanceY = event.clientY - dragStartY.current;
+      const distanceX = event.clientX - dragStartX.current;
+
+      if (Math.abs(distanceY) > Math.abs(distanceX)) {
+        if (distanceY < -36) setSheetExpanded(true);
+        if (distanceY > 36) setSheetExpanded(false);
+      }
+    }
+
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     dragStartY.current = null;
+    dragStartX.current = null;
+    dragPointerId.current = null;
   };
 
   const moveSheetDrag = (event) => {
-    if (dragStartY.current === null) return;
-    const distance = event.clientY - dragStartY.current;
-    if (distance < -45) setSheetExpanded(true);
-    if (distance > 45) setSheetExpanded(false);
-  };
-
-  const startSheetTouch = (event) => {
-    dragStartY.current = event.touches[0]?.clientY ?? null;
-    dragStartX.current = event.touches[0]?.clientX ?? null;
-  };
-
-  const moveSheetTouch = (event) => {
     if (
       dragStartY.current === null ||
       dragStartX.current === null ||
-      !event.touches[0]
+      dragPointerId.current !== event.pointerId
     ) {
       return;
     }
-    const distanceY = event.touches[0].clientY - dragStartY.current;
-    const distanceX = event.touches[0].clientX - dragStartX.current;
+    const distanceY = event.clientY - dragStartY.current;
+    const distanceX = event.clientX - dragStartX.current;
 
     if (Math.abs(distanceX) >= Math.abs(distanceY)) return;
 
-    if (Math.abs(distanceY) > 12) event.preventDefault();
-    if (distanceY < -45) setSheetExpanded(true);
-    if (distanceY > 45) setSheetExpanded(false);
+    if (Math.abs(distanceY) > 8) event.preventDefault();
+    if (distanceY < -36) setSheetExpanded(true);
+    if (distanceY > 36) setSheetExpanded(false);
+  };
+
+  const cancelSheetDrag = (event) => {
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStartY.current = null;
+    dragStartX.current = null;
+    dragPointerId.current = null;
+  };
+
+  const startSheetTouch = (event) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    dragStartY.current = touch.clientY;
+    dragStartX.current = touch.clientX;
+  };
+
+  const moveSheetTouch = (event) => {
+    const touch = event.touches[0];
+    if (
+      !touch ||
+      dragStartY.current === null ||
+      dragStartX.current === null
+    ) {
+      return;
+    }
+
+    const distanceY = touch.clientY - dragStartY.current;
+    const distanceX = touch.clientX - dragStartX.current;
+    if (Math.abs(distanceX) >= Math.abs(distanceY)) return;
+
+    if (Math.abs(distanceY) > 8) event.preventDefault();
+    if (distanceY < -36) setSheetExpanded(true);
+    if (distanceY > 36) setSheetExpanded(false);
+  };
+
+  const endSheetTouch = (event) => {
+    const touch = event.changedTouches[0];
+    if (
+      touch &&
+      dragStartY.current !== null &&
+      dragStartX.current !== null
+    ) {
+      const distanceY = touch.clientY - dragStartY.current;
+      const distanceX = touch.clientX - dragStartX.current;
+
+      if (Math.abs(distanceY) > Math.abs(distanceX)) {
+        if (distanceY < -36) setSheetExpanded(true);
+        if (distanceY > 36) setSheetExpanded(false);
+      }
+    }
+
+    dragStartY.current = null;
+    dragStartX.current = null;
   };
 
   if (currentTab === "courses") {
@@ -1043,22 +1189,20 @@ export default function App() {
         >
           <div className="flex min-h-0 w-full flex-col">
           <div
-            className="touch-pan-x px-[14px] pt-4"
+            className="course-sheet-drag-handle flex h-6 shrink-0 touch-none cursor-grab items-center justify-center active:cursor-grabbing"
             onPointerDown={startSheetDrag}
             onPointerMove={moveSheetDrag}
             onPointerUp={endSheetDrag}
-            onPointerCancel={() => {
-              dragStartY.current = null;
-              dragStartX.current = null;
-            }}
+            onPointerCancel={cancelSheetDrag}
             onTouchStart={startSheetTouch}
             onTouchMove={moveSheetTouch}
-            onTouchEnd={() => {
-              dragStartY.current = null;
-              dragStartX.current = null;
-            }}
+            onTouchEnd={endSheetTouch}
+            onTouchCancel={endSheetTouch}
             onDoubleClick={() => setSheetExpanded((current) => !current)}
           >
+            <span className="h-1 w-9 rounded-full bg-[#d7d7db]" />
+          </div>
+          <div className="course-sheet-filters px-[14px]">
           <div className="no-scrollbar flex cursor-grab gap-2 overflow-x-auto pb-2 active:cursor-grabbing">
             <button
               onClick={(event) => openFilter("major-root", event)}

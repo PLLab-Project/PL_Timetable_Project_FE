@@ -178,7 +178,7 @@
   }
 
   .timetable-grid {
-    height: calc(100% - 38px);
+    height: calc(100% - 42px);
     min-height: 0;
   }
 
@@ -197,16 +197,20 @@
     background: white;
   }
 
-  .course-sheet > div > div:first-child {
+  .course-sheet-drag-handle {
+    display: none;
+  }
+
+  .course-sheet-filters {
     padding: 18px 16px 0;
   }
 
-  .course-sheet > div > div:first-child button,
-  .course-sheet > div > div:first-child input {
+  .course-sheet-filters button,
+  .course-sheet-filters input {
     font-size: 11px;
   }
 
-  .course-sheet > div > div:first-child button {
+  .course-sheet-filters button {
     min-height: 31px;
     padding-right: 12px;
     padding-left: 12px;

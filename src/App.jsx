@@ -17,6 +17,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import BottomNavigation from "./components/BottomNavigation";
+import MyPage from "./pages/MyPage";
+import MyTimetableList from "./pages/MyTimeTableList";
+import MyTimetableDetail from "./pages/MyTimetableDetail";
 
 const DAYS = ["월", "화", "수", "목", "금"];
 const TIMES = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
@@ -547,27 +551,6 @@ function AutoSchedulePanel({ onClose, onGenerate }) {
   );
 }
 
-function BottomNavigation({ active, onCourses, onTimetable }) {
-  const itemClass = (name) =>
-    `flex flex-col items-center justify-center gap-0.5 text-[10px] ${
-      active === name ? "font-semibold text-brand" : "text-[#999]"
-    }`;
-
-  return (
-    <nav className="app-bottom-navigation absolute bottom-0 left-0 z-20 grid h-[54px] w-full grid-cols-3 border-t border-[#e5e5e5] bg-white">
-      <button className={itemClass("courses")} onClick={onCourses}>
-        <LayoutList size={17} /> 내 강의
-      </button>
-      <button className={itemClass("timetable")} onClick={onTimetable}>
-        <CalendarDays size={17} /> 시간표
-      </button>
-      <button className={itemClass("mypage")}>
-        <Circle size={16} /> 마이페이지
-      </button>
-    </nav>
-  );
-}
-
 const importedCourses = [
   { id: 101, name: "운영체제론", area: "전공선택", credits: "3학점" },
   { id: 102, name: "게임프로그래밍", area: "전공선택", credits: "3학점" },
@@ -831,7 +814,7 @@ function GraduationModal({ onClose }) {
   );
 }
 
-function MyCoursesPage({ onTimetable }) {
+function MyCoursesPage({ onTimetable, onMyPage }) {
   const [courses, setCourses] = useState([]);
   const [drafts, setDrafts] = useState([
     { key: "initial", editingId: null, initial: null },
@@ -964,6 +947,7 @@ function MyCoursesPage({ onTimetable }) {
           active="courses"
           onCourses={() => {}}
           onTimetable={onTimetable}
+          onMyPage={onMyPage}
         />
         {showGraduation && <GraduationModal onClose={() => setShowGraduation(false)} />}
       </div>
@@ -973,6 +957,7 @@ function MyCoursesPage({ onTimetable }) {
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState("timetable");
+  const [selectedTimetableId, setSelectedTimetableId] = useState(null);
   const [selectedIds, setSelectedIds] = useState([1, 2]);
   const [activeCourse, setActiveCourse] = useState(null);
   const [query, setQuery] = useState("");
@@ -1155,7 +1140,49 @@ export default function App() {
   };
 
   if (currentTab === "courses") {
-    return <MyCoursesPage onTimetable={() => setCurrentTab("timetable")} />;
+    return (
+      <MyCoursesPage
+        onTimetable={() => setCurrentTab("timetable")}
+        onMyPage={() => setCurrentTab("mypage")}
+      />
+    );
+  }
+
+  if (currentTab === "mypage") {
+    return (
+      <MyPage
+        onCourses={() => setCurrentTab("courses")}
+        onTimetable={() => setCurrentTab("timetable")}
+        onMyTimetableList={() => setCurrentTab("mytimetablelist")}
+      />
+    );
+  }
+  
+  if (currentTab === "mytimetablelist") {
+    return (
+      <MyTimetableList
+        onBack={() => setCurrentTab("mypage")}
+        onCourses={() => setCurrentTab("courses")}
+        onTimetable={() => setCurrentTab("timetable")}
+        onMyPage={() => setCurrentTab("mypage")}
+        onSelectTimetable={(id) => {
+          setSelectedTimetableId(id);
+          setCurrentTab("mytimetabledetail");
+        }}
+      />
+    );
+  }
+  
+  if (currentTab === "mytimetabledetail") {
+    return (
+      <MyTimetableDetail
+        timetableId={selectedTimetableId}
+        onBack={() => setCurrentTab("mytimetablelist")}
+        onCourses={() => setCurrentTab("courses")}
+        onTimetable={() => setCurrentTab("timetable")}
+        onMyPage={() => setCurrentTab("mypage")}
+      />
+    );
   }
 
   return (
@@ -1285,10 +1312,11 @@ export default function App() {
         </section>
 
         <BottomNavigation
-          active="timetable"
-          onCourses={() => setCurrentTab("courses")}
-          onTimetable={() => {}}
-        />
+        active="timetable"
+        onCourses={() => setCurrentTab("courses")}
+        onTimetable={() => {}}
+        onMyPage={() => setCurrentTab("mypage")}
+      />
 
         {overlay === "major-root" && (
           <Popover

@@ -1,21 +1,23 @@
-import { CalendarDays, Star, Circle, ChevronRight } from "lucide-react";
+import { CalendarDays, Star, Circle, ChevronRight, AlertTriangle } from "lucide-react";
 import BottomNavigation from "../components/BottomNavigation";
+import { useState } from "react";
 
-function MyPage({ onCourses, onTimetable, onMyTimetableList }) {
-  // TODO: 백엔드 API 연결 후 실제 사용자 정보로 변경
-  const user = {
-    name: "홍길동",
-    studentId: "20221234",
-    major: "컴퓨터공학과",
-    grade: 3,
-  };
+function MyPage({ user, onCourses, onTimetable, onMyTimetableList, onFavoriteTimetableList, onAccountInfo, onWithdraw }) {
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [agreedToWithdraw, setAgreedToWithdraw] = useState(false);
 
   const menuItems = [
     { icon: CalendarDays, label: "내 시간표 확인", onClick: onMyTimetableList },
-    { icon: Star, label: "즐겨찾기 시간표" },
-    { icon: Circle, label: "계정정보 확인/변경" },
+    { icon: Star, label: "즐겨찾기 시간표", onClick: onFavoriteTimetableList },
+    { icon: Circle, label: "계정정보 확인/변경", onClick: onAccountInfo },
   ];
 
+  const handleWithdraw = () => {
+    setShowWithdrawModal(false);
+    setAgreedToWithdraw(false);
+    onWithdraw();
+  };
+  
   return (
     <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
       <div className="my-courses-page relative h-full overflow-hidden">
@@ -59,10 +61,59 @@ function MyPage({ onCourses, onTimetable, onMyTimetableList }) {
             ))}
 
             {/* 회원탈퇴 */}
-            <button className="w-full py-5 text-left">
-              <span className="font-medium text-red-500">회원탈퇴</span>
-            </button>
+          <button
+            onClick={() => setShowWithdrawModal(true)}
+            className="w-full py-5 text-left">
+            <span className="font-medium text-red-500">회원탈퇴</span>
+          </button>
+        </div>
+        {/* 회원탈퇴 확인 모달 */}
+        {showWithdrawModal && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35">
+            <section className="w-[290px] rounded-2xl bg-white px-6 py-7 text-center shadow-lg">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+                <AlertTriangle size={22} className="text-red-500" />
+              </div>
+              <p className="mt-4 text-base font-semibold">정말 탈퇴하시겠어요?</p>
+              <p className="mt-1 text-xs leading-relaxed text-gray-400">
+                탈퇴하면 계정 정보와 저장된 모든 시간표가
+                <br />
+                삭제되며 복구할 수 없어요.
+              </p>
+
+              <label className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={agreedToWithdraw}
+                  onChange={(event) => setAgreedToWithdraw(event.target.checked)}
+                  className="h-4 w-4"
+                />
+                위 내용을 확인했으며 탈퇴에 동의합니다
+              </label>
+
+              <div className="mt-5 flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowWithdrawModal(false);
+                    setAgreedToWithdraw(false);
+                  }}
+                  className="flex-1 rounded-lg border border-gray-200 py-2.5 text-sm font-medium text-gray-500"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleWithdraw}
+                  disabled={!agreedToWithdraw}
+                  className={`flex-1 rounded-lg py-2.5 text-sm font-semibold text-white ${
+                    agreedToWithdraw ? "bg-red-600" : "bg-red-200"
+                  }`}
+                >
+                  탈퇴하기
+                </button>
+              </div>
+            </section>
           </div>
+          )}
         </div>
 
         <BottomNavigation

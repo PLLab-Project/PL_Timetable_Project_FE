@@ -21,6 +21,10 @@ import BottomNavigation from "./components/BottomNavigation";
 import MyPage from "./pages/MyPage";
 import MyTimetableList from "./pages/MyTimeTableList";
 import MyTimetableDetail from "./pages/MyTimetableDetail";
+import MyFavoriteTimetableList from "./pages/MyFavoriteTimetableList";
+import MyAccountInfo from "./pages/MyAccountInfo";
+import LoginPage from "./pages/LoginPage";
+import SignupInfoPage from "./pages/SignupInfoPage";
 
 const DAYS = ["월", "화", "수", "목", "금"];
 const TIMES = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
@@ -956,8 +960,11 @@ function MyCoursesPage({ onTimetable, onMyPage }) {
 }
 
 export default function App() {
+  const [authStep, setAuthStep] = useState("login");
   const [currentTab, setCurrentTab] = useState("timetable");
   const [selectedTimetableId, setSelectedTimetableId] = useState(null);
+  const [timetableReturnTab, setTimetableReturnTab] = useState("mytimetablelist");
+  const [user, setUser] = useState(null);
   const [selectedIds, setSelectedIds] = useState([1, 2]);
   const [activeCourse, setActiveCourse] = useState(null);
   const [query, setQuery] = useState("");
@@ -1139,6 +1146,27 @@ export default function App() {
     dragStartX.current = null;
   };
 
+  if (authStep === "login") {
+    return (
+      <LoginPage
+        onGoogleLogin={() => setAuthStep("signup")}
+      />
+    );
+  }
+  
+  if (authStep === "signup") {
+    return (
+      <SignupInfoPage
+        onBack={() => setAuthStep("login")}
+        onComplete={(info) => {
+          setUser(info); // { name, studentId, major, grade }
+          setAuthStep("app");
+          setCurrentTab("timetable"); // 메인 화면(시간표 탭)으로
+        }}
+      />
+    );
+  }
+
   if (currentTab === "courses") {
     return (
       <MyCoursesPage
@@ -1151,9 +1179,19 @@ export default function App() {
   if (currentTab === "mypage") {
     return (
       <MyPage
+        user={user}
         onCourses={() => setCurrentTab("courses")}
         onTimetable={() => setCurrentTab("timetable")}
         onMyTimetableList={() => setCurrentTab("mytimetablelist")}
+        onFavoriteTimetableList={() => setCurrentTab("myfavoritetimetablelist")}
+        onAccountInfo={() => setCurrentTab("myaccountinfo")}
+        onWithdraw={() => {
+          // TODO: 백엔드 API 연결 후 실제 탈퇴 처리로 변경
+          alert("회원탈퇴가 완료되었습니다.");
+          setUser(null);           // 유저 정보 초기화
+          setAuthStep("login");    // 로그인 화면으로
+          setCurrentTab("timetable"); // authStep이 다시 "app"이 될 때를 대비해 기본값으로 리셋
+        }}
       />
     );
   }
@@ -1167,6 +1205,7 @@ export default function App() {
         onMyPage={() => setCurrentTab("mypage")}
         onSelectTimetable={(id) => {
           setSelectedTimetableId(id);
+          setTimetableReturnTab("mytimetablelist");
           setCurrentTab("mytimetabledetail");
         }}
       />
@@ -1177,7 +1216,39 @@ export default function App() {
     return (
       <MyTimetableDetail
         timetableId={selectedTimetableId}
-        onBack={() => setCurrentTab("mytimetablelist")}
+        onBack={() => setCurrentTab(timetableReturnTab)}
+        onCourses={() => setCurrentTab("courses")}
+        onTimetable={() => setCurrentTab("timetable")}
+        onMyPage={() => setCurrentTab("mypage")}
+      />
+    );
+  }
+
+  if (currentTab === "myfavoritetimetablelist") {
+    return (
+      <MyFavoriteTimetableList
+        onBack={() => setCurrentTab("mypage")}
+        onCourses={() => setCurrentTab("courses")}
+        onTimetable={() => setCurrentTab("timetable")}
+        onMyPage={() => setCurrentTab("mypage")}
+        onSelectTimetable={(id) => {
+          setSelectedTimetableId(id);
+          setTimetableReturnTab("myfavoritetimetablelist");
+          setCurrentTab("mytimetabledetail");
+        }}
+      />
+    );
+  }
+
+  if (currentTab === "myaccountinfo") {
+    return (
+      <MyAccountInfo
+        user={user}
+        onSave={(updatedUser) => {
+          setUser(updatedUser);
+          setCurrentTab("mypage");
+        }}
+        onBack={() => setCurrentTab("mypage")}
         onCourses={() => setCurrentTab("courses")}
         onTimetable={() => setCurrentTab("timetable")}
         onMyPage={() => setCurrentTab("mypage")}

@@ -9,6 +9,7 @@ const timetables = [
     credit: 13,
     subjectCount: 5,
     current: true,
+    favorite: false,
     courses: [
       { id: 1, name: "프론트엔드 웹디자인", professor: "김정민", room: "A409-웹스토리지인실습실", day: 2, start: 0.5, span: 1.5, color: "#E7C332" },
       { id: 2, name: "프론트엔드 웹디자인", professor: "김정민", room: "A409-웹스토리지인실습실", day: 3, start: 0.5, span: 1.5, color: "#E7C332" },
@@ -24,6 +25,7 @@ const timetables = [
     credit: 8,
     subjectCount: 3,
     current: false,
+    favorite: false,
     courses: [
       { id: 1, name: "프론트엔드 웹디자인", professor: "김정민", room: "A409-웹스토리지인실습실", day: 2, start: 0.5, span: 1.5, color: "#E7C332" },
       { id: 2, name: "프론트엔드 웹디자인", professor: "김정민", room: "A409-웹스토리지인실습실", day: 3, start: 0.5, span: 1.5, color: "#E7C332" },
@@ -36,6 +38,7 @@ const timetables = [
     credit: 8,
     subjectCount: 3,
     current: false,
+    favorite: true,
     courses: [
       { id: 3, name: "피드 웹디자인", professor: "김정민", room: "A409-웹스토리지인실습실", day: 2, start: 4, span: 2, color: "#75C6A8" },
       { id: 5, name: "디지털리터러시", professor: "박지훈", room: "C301", day: 0, start: 5, span: 2, color: "#78A7E8" },

@@ -1,12 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-
-const MAJORS = [
-  "컴퓨터공학전공",
-  "소프트웨어학과",
-  "전자공학과",
-  "산업공학과",
-];
+import { getDepartments } from "../api/departments";
 
 export default function SignupInfoPage({
   googleProfile,
@@ -16,16 +10,72 @@ export default function SignupInfoPage({
   const [name, setName] = useState("");
   const [studentId, setStudentId] = useState("");
   const [majorQuery, setMajorQuery] = useState("");
-  const [major, setMajor] = useState("");
+  const [major, setMajor] = useState(null);
+  const [departments, setDepartments] = useState([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
+  const [departmentsError, setDepartmentsError] = useState(null);
   const [grade, setGrade] = useState(null);
   const [showResults, setShowResults] = useState(false);
 
-  const filtered = MAJORS.filter((m) => m.includes(majorQuery));
   const canSubmit = name && studentId && major && grade;
+
+  useEffect(() => {
+    const query = majorQuery.trim();
+
+    if (!query) {
+      setDepartments([]);
+      setDepartmentsLoading(false);
+      setDepartmentsError(null);
+      return undefined;
+    }
+
+    if (major?.name === query) {
+      setDepartments([major]);
+      setDepartmentsLoading(false);
+      setDepartmentsError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setDepartmentsLoading(true);
+      setDepartmentsError(null);
+
+      getDepartments(
+        {
+          query,
+          currentOnly: true,
+          page: 0,
+          size: 20,
+        },
+        controller.signal,
+      )
+        .then((result) => {
+          setDepartments(result?.items ?? []);
+        })
+        .catch((error) => {
+          if (error.name === "AbortError") return;
+          setDepartments([]);
+          setDepartmentsError(
+            error.message || "학과 목록을 불러오지 못했습니다.",
+          );
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setDepartmentsLoading(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [major, majorQuery]);
 
   return (
     <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
-      <div className="my-courses-page relative h-full overflow-hidden">
+      <div className="signup-page my-courses-page relative h-full overflow-hidden">
         <div className="my-courses-content no-scrollbar h-full overflow-y-auto p-6">
 
           <button onClick={onBack} className="mb-6">
@@ -69,6 +119,7 @@ export default function SignupInfoPage({
               value={majorQuery}
               onChange={(e) => {
                 setMajorQuery(e.target.value);
+                setMajor(null);
                 setShowResults(true);
               }}
               onFocus={() => setShowResults(true)}
@@ -77,20 +128,46 @@ export default function SignupInfoPage({
             />
 
             {showResults && majorQuery && (
-              <ul className="absolute bg-white border rounded-md w-full mt-1 shadow z-10">
-                {filtered.map((m) => (
+              <ul className="absolute left-0 top-full z-10 -mt-px max-h-[220px] w-full overflow-y-auto rounded-md border bg-white shadow">
+                {departmentsLoading && (
+                  <li className="px-4 py-2 text-sm text-gray-400">
+                    학과를 검색하고 있습니다.
+                  </li>
+                )}
+                {!departmentsLoading && departmentsError && (
+                  <li className="px-4 py-2 text-sm text-red-500">
+                    학과 목록을 불러오지 못했습니다.
+                  </li>
+                )}
+                {!departmentsLoading &&
+                  !departmentsError &&
+                  departments.length === 0 && (
+                    <li className="px-4 py-2 text-sm text-gray-400">
+                      검색 결과가 없습니다.
+                    </li>
+                  )}
+                {!departmentsLoading &&
+                  !departmentsError &&
+                  departments.map((department) => (
                   <li
-                    key={m}
+                    key={department.code}
                     onClick={() => {
-                      setMajor(m);
-                      setMajorQuery(m);
+                      setMajor(department);
+                      setMajorQuery(department.name);
                       setShowResults(false);
                     }}
                     className="px-4 py-2 hover:bg-purple-50 cursor-pointer"
                   >
-                    {m}
+                    <span className="block text-sm text-[#333]">
+                      {department.name}
+                    </span>
+                    {department.collegeName && (
+                      <span className="mt-0.5 block text-[11px] text-gray-400">
+                        {department.collegeName}
+                      </span>
+                    )}
                   </li>
-                ))}
+                  ))}
               </ul>
             )}
           </div>
@@ -121,7 +198,9 @@ export default function SignupInfoPage({
               onComplete({
                 name,
                 studentId,
-                major,
+                major: major.name,
+                departmentCode: major.code,
+                collegeName: major.collegeName,
                 grade,
               })
             }

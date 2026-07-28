@@ -303,6 +303,16 @@
     background: white;
   }
 
+  .login-page,
+  .signup-page {
+    padding-left: 0;
+  }
+
+  .login-content {
+    padding-top: 40px;
+    padding-bottom: 40px;
+  }
+
   .course-form-list {
     grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
     gap: 14px;

@@ -4,8 +4,8 @@ import { Calendar } from "lucide-react";
 export default function LoginPage({ onGoogleLogin }) {
   return (
     <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
-      <div className="my-courses-page relative h-full overflow-hidden">
-        <div className="my-courses-content flex h-full flex-col items-center justify-center px-6 text-center">
+      <div className="login-page my-courses-page relative h-full overflow-hidden">
+        <div className="login-content my-courses-content flex h-full flex-col items-center justify-center px-6 text-center">
 
           <div className="w-16 h-16 rounded-2xl border-2 border-purple-600 flex items-center justify-center mb-6">
             <Calendar className="text-purple-600" size={28} />

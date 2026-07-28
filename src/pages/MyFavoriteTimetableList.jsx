@@ -1,15 +1,33 @@
 import { ArrowLeft, ChevronRight, Star } from "lucide-react";
 import BottomNavigation from "../components/BottomNavigation";
-import { timetables } from "./MyTimeTableList";
 
-export default function MyFavoriteTimetableList({ onBack, onCourses, onTimetable, onMyPage, onSelectTimetable }) {
-  const favoriteTimetables = timetables.filter((timetable) => timetable.favorite);
+function totalCredits(timetable) {
+  if (timetable.totalCredits !== undefined && timetable.totalCredits !== null) {
+    return timetable.totalCredits;
+  }
+
+  return timetable.courses.reduce(
+    (sum, course) => sum + (Number(course.credits) || 0),
+    0,
+  );
+}
+
+export default function MyFavoriteTimetableList({
+  timetables,
+  onBack,
+  onCourses,
+  onTimetable,
+  onMyPage,
+  onSelectTimetable,
+}) {
+  const favoriteTimetables = timetables.filter(
+    (timetable) => timetable.favorite,
+  );
 
   return (
     <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
       <div className="my-courses-page relative h-full overflow-hidden">
         <div className="my-courses-content no-scrollbar h-full overflow-y-auto px-[14px] pb-[80px] pt-6">
-          {/* 상단 헤더 */}
           <div className="flex items-center gap-4">
             <button onClick={onBack} aria-label="뒤로가기">
               <ArrowLeft size={16} className="text-black" />
@@ -24,9 +42,9 @@ export default function MyFavoriteTimetableList({ onBack, onCourses, onTimetable
                 즐겨찾기한 시간표가 없어요
               </p>
               <p className="mt-1 text-xs text-gray-400">
-                시간표 화면에서 별 아이콘을 눌러 마음에 드는
+                시간표 화면에서 별 아이콘을 눌러
                 <br />
-                시간표를 저장해보세요.
+                시간표를 저장해보세요
               </p>
             </div>
           ) : (
@@ -35,12 +53,13 @@ export default function MyFavoriteTimetableList({ onBack, onCourses, onTimetable
                 <button
                   key={timetable.id}
                   onClick={() => onSelectTimetable(timetable.id)}
-                  className="mb-4 flex w-full items-center justify-between rounded-xl border border-gray-200 p-5"
+                  className="mb-4 flex w-full items-center justify-between rounded-xl border border-gray-200 p-5 text-left"
                 >
                   <div>
-                    <h2 className="text-lg font-bold">{timetable.semester}</h2>
+                    <h2 className="text-lg font-bold">{timetable.name}</h2>
                     <p className="mt-2 text-sm text-gray-500">
-                      {timetable.credit}학점 · {timetable.subjectCount}과목
+                      {timetable.semesterId}학기 · {totalCredits(timetable)}
+                      학점 · {timetable.courses.length}과목
                     </p>
                   </div>
                   <ChevronRight size={12} className="text-gray-400" />

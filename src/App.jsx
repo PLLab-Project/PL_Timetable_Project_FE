@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronUp,
@@ -25,10 +26,181 @@ import MyFavoriteTimetableList from "./pages/MyFavoriteTimetableList";
 import MyAccountInfo from "./pages/MyAccountInfo";
 import LoginPage from "./pages/LoginPage";
 import SignupInfoPage from "./pages/SignupInfoPage";
+import { ApiError } from "./api/client";
+import {
+  createCompletedCourse,
+  deleteCompletedCourse,
+  getCompletedCourses,
+  updateCompletedCourse,
+} from "./api/completedCourses";
+import { searchCourses } from "./api/courses";
+import { getAllDepartments } from "./api/departments";
+import { getGraduationEvaluation } from "./api/graduation";
+import {
+  createOptimizationJob,
+  mapOptimizationSections,
+  waitForOptimizationJob,
+} from "./api/optimizations";
+import { getSections } from "./api/sections";
+import { findLatestSemester, getSemesters } from "./api/semesters";
+import {
+  createTimetable,
+  deleteTimetable as deleteServerTimetable,
+  getTimetable,
+  getTimetables,
+  mapTimetableResponse,
+  replaceTimetableSections,
+  updateTimetable as updateServerTimetable,
+} from "./api/timetables";
+import {
+  getCurrentUser,
+  updateCurrentUser,
+  withdrawCurrentUser,
+} from "./api/users";
+import { useSectionCourses } from "./hooks/useSectionCourses";
 
 const DAYS = ["월", "화", "수", "목", "금"];
 const TIMES = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
 const COLORS = ["#F0C92D", "#75C6A8", "#F09A86", "#78A7E8", "#B997E8"];
+const FALLBACK_SEMESTER_ID = "2026-2";
+const COURSE_PAGE_SIZE = 20;
+const OPTIMIZATION_CANDIDATE_LIMIT = 100;
+
+function mapUserProfile(profile, fallback = {}) {
+  return {
+    ...fallback,
+    id: profile?.id ?? fallback.id,
+    name: profile?.name ?? fallback.name ?? "",
+    studentId:
+      profile?.studentNumber ?? fallback.studentId ?? "",
+    grade: profile?.grade ?? fallback.grade ?? 1,
+    major: profile?.department ?? fallback.major ?? "",
+    departmentCode:
+      profile?.departmentId ?? fallback.departmentCode ?? "",
+    collegeName: fallback.collegeName ?? "",
+  };
+}
+
+const DAY_API_VALUES = {
+  월: "MONDAY",
+  화: "TUESDAY",
+  수: "WEDNESDAY",
+  목: "THURSDAY",
+  금: "FRIDAY",
+};
+
+const PREFERRED_TIME_RANGES = {
+  오전: [9, 12],
+  오후: [12, 18],
+  저녁: [18, 22],
+};
+
+const SORT_API_VALUES = {
+  "": "NAME_ASC",
+  기본순: "NAME_ASC",
+  인기순: "POPULARITY_DESC",
+  이름순: "NAME_ASC",
+};
+
+const MAJOR_API_FILTERS = {
+  교양필수: { completionCategory: "교필" },
+  교직: { completionCategory: "교직" },
+  일반선택: { completionCategory: "일선" },
+  "인간과 소통": { category: "교양선택(제1영역:인간과소통)" },
+  "사회와 경제": { category: "교양선택(제2영역:사회와경제)" },
+  "과학과 기술": { category: "교양선택(제3영역:과학과기술)" },
+  "예술과 문화": { category: "교양선택(제4영역:예술과문화)" },
+  "융합과 혁신": { category: "교양선택(제5영역:융합과혁신)" },
+  디지털리터러시: { category: "교양선택(제6영역:디지털리터러시)" },
+};
+
+function getSectionKey(course) {
+  if (!course?.courseCode || !course?.sectionCode) return null;
+  return `${course.courseCode}:${course.sectionCode}`;
+}
+
+function mergeCoursesBySection(...courseGroups) {
+  const coursesByKey = new Map();
+
+  courseGroups.flat().forEach((course) => {
+    const key = getSectionKey(course);
+    if (key) coursesByKey.set(key, course);
+  });
+
+  return [...coursesByKey.values()];
+}
+
+function toTimetableSectionRequests(courses) {
+  const sectionsByKey = new Map();
+
+  courses.forEach((course) => {
+    const key = getSectionKey(course);
+    if (!key) return;
+
+    sectionsByKey.set(key, {
+      courseCode: course.courseCode,
+      sectionCode: course.sectionCode,
+    });
+  });
+
+  return [...sectionsByKey.values()];
+}
+
+function getAvailableTime(preferredTimes) {
+  if (!preferredTimes?.length) {
+    return { startTime: "09:00:00", endTime: "19:00:00" };
+  }
+
+  const ranges = preferredTimes
+    .map((time) => PREFERRED_TIME_RANGES[time])
+    .filter(Boolean);
+  const startHour = Math.min(...ranges.map(([start]) => start));
+  const endHour = Math.max(...ranges.map(([, end]) => end));
+
+  return {
+    startTime: `${String(startHour).padStart(2, "0")}:00:00`,
+    endTime: `${String(endHour).padStart(2, "0")}:00:00`,
+  };
+}
+
+function getOptimizationErrorMessage(error) {
+  if (error?.name === "AbortError") {
+    return null;
+  }
+
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return "백엔드 로그인 세션이 없습니다. 실제 로그인 API를 연결한 뒤 다시 시도해주세요.";
+    }
+
+    if (error.status === 403) {
+      return "자동편성 요청 권한 또는 CSRF 인증을 확인해주세요.";
+    }
+
+    if (error.code === "REQUIRED_COURSE_CONFLICT") {
+      return "고정한 강의끼리 시간이 겹칩니다. 고정을 일부 해제한 뒤 다시 시도해주세요.";
+    }
+
+    if (error.status === 409) {
+      return "자동편성 결과를 서버 시간표에 저장하는 동안 강의 시간이 충돌했습니다. 조건을 확인한 뒤 다시 시도해주세요.";
+    }
+
+    if (
+      error.status === 422 ||
+      error.code === "NO_FEASIBLE_TIMETABLE"
+    ) {
+      return "선택한 조건을 모두 만족하는 시간표가 없습니다. 조건을 줄여서 다시 시도해주세요.";
+    }
+
+    return error.message || "자동편성 요청을 처리하지 못했습니다.";
+  }
+
+  if (error instanceof TypeError) {
+    return "자동편성 서버에 연결할 수 없습니다. API 주소와 CORS 설정을 확인해주세요.";
+  }
+
+  return error?.message || "자동편성 중 문제가 발생했습니다.";
+}
 
 const initialCourses = [
   {
@@ -109,14 +281,517 @@ const initialCourses = [
   },
 ];
 
-function Timetable({ selectedIds, activeCourseId }) {
-  const selected = initialCourses.filter((course) => selectedIds.includes(course.id));
-  const previewCourse = initialCourses.find(
-    (course) => course.id === activeCourseId,
+function createInitialTimetables(semesterId = FALLBACK_SEMESTER_ID) {
+  return [
+    {
+      id: 1,
+      name: "시간표 1",
+      semesterId,
+      favorite: false,
+      courses: [],
+    },
+  ];
+}
+
+function getTimetableBlocks(course, preview = false) {
+  if (course?.blocks?.length) return course.blocks;
+  if (!course) return [];
+
+  const days =
+    preview && course.previewDays?.length
+      ? course.previewDays
+      : [course.day];
+
+  return days
+    .filter((day) => day !== undefined)
+    .map((day) => ({
+      day,
+      start: course.start,
+      span: course.span,
+      room: course.room,
+    }));
+}
+
+function getConflictingCourses(course, selectedCourses) {
+  const candidateBlocks = getTimetableBlocks(course);
+
+  if (candidateBlocks.length === 0) return [];
+
+  return selectedCourses.filter((selectedCourse) => {
+    if (selectedCourse.id === course.id) return false;
+
+    return getTimetableBlocks(selectedCourse).some((selectedBlock) =>
+      candidateBlocks.some((candidateBlock) => {
+        if (selectedBlock.day !== candidateBlock.day) return false;
+
+        const selectedEnd = selectedBlock.start + selectedBlock.span;
+        const candidateEnd = candidateBlock.start + candidateBlock.span;
+
+        return (
+          selectedBlock.start < candidateEnd &&
+          candidateBlock.start < selectedEnd
+        );
+      }),
+    );
+  });
+}
+
+function timeCellKey(day, slot) {
+  return `${day}:${slot}`;
+}
+
+function getTimeSelectionCells(selection) {
+  const cells = [];
+
+  for (let day = selection.dayStart; day <= selection.dayEnd; day += 1) {
+    for (
+      let slot = selection.startSlot;
+      slot < selection.endSlot;
+      slot += 1
+    ) {
+      cells.push({ day, slot });
+    }
+  }
+
+  return cells;
+}
+
+function courseOverlapsTimeSelections(course, timeSelections) {
+  return getTimetableBlocks(course).some((block) => {
+    const blockEnd = block.start + block.span;
+
+    return timeSelections.some((selection) =>
+      selection.cells.some((cell) => {
+        const cellStart = cell.slot / 2;
+        const cellEnd = cellStart + 0.5;
+
+        return (
+          block.day === cell.day &&
+          block.start < cellEnd &&
+          cellStart < blockEnd
+        );
+      }),
+    );
+  });
+}
+
+function courseMatchesTimeSelections(course, timeSelections) {
+  return (
+    timeSelections.length === 0 ||
+    courseOverlapsTimeSelections(course, timeSelections)
+  );
+}
+
+function drawTimetableText(context, text, x, y, maxWidth, lineHeight, maxLines) {
+  const characters = [...String(text || "")];
+  const lines = [];
+  let currentLine = "";
+
+  characters.forEach((character) => {
+    const nextLine = `${currentLine}${character}`;
+    if (context.measureText(nextLine).width > maxWidth && currentLine) {
+      lines.push(currentLine);
+      currentLine = character;
+      return;
+    }
+    currentLine = nextLine;
+  });
+
+  if (currentLine) lines.push(currentLine);
+
+  lines.slice(0, maxLines).forEach((line, index) => {
+    const isLastVisibleLine = index === maxLines - 1 && lines.length > maxLines;
+    const output = isLastVisibleLine
+      ? `${line.slice(0, Math.max(0, line.length - 1))}…`
+      : line;
+    context.fillText(output, x, y + index * lineHeight, maxWidth);
+  });
+}
+
+function downloadTimetableImage(timetable) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  const width = 1200;
+  const height = 1400;
+  const margin = 60;
+  const gridTop = 180;
+  const gridWidth = width - margin * 2;
+  const gridHeight = 1120;
+  const timeColumnWidth = 58;
+  const dayHeaderHeight = 58;
+  const dayWidth = (gridWidth - timeColumnWidth) / 5;
+  const hourHeight = (gridHeight - dayHeaderHeight) / 10;
+  const days = ["월", "화", "수", "목", "금"];
+  const times = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
+
+  canvas.width = width;
+  canvas.height = height;
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+
+  context.fillStyle = "#777777";
+  context.font = "500 24px sans-serif";
+  context.fillText(`${timetable.semesterId}학기`, margin, 60);
+  context.fillStyle = "#111111";
+  context.font = "700 44px sans-serif";
+  context.fillText(timetable.name, margin, 115);
+
+  context.strokeStyle = "#d9d9d9";
+  context.lineWidth = 2;
+  context.strokeRect(margin, gridTop, gridWidth, gridHeight);
+
+  context.font = "500 20px sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#888888";
+
+  days.forEach((day, index) => {
+    const x = margin + timeColumnWidth + index * dayWidth;
+    context.fillText(
+      day,
+      x + dayWidth / 2,
+      gridTop + dayHeaderHeight / 2,
+    );
+  });
+
+  context.strokeStyle = "#e5e5e5";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(margin, gridTop + dayHeaderHeight);
+  context.lineTo(margin + gridWidth, gridTop + dayHeaderHeight);
+
+  for (let column = 0; column <= 5; column += 1) {
+    const x = margin + timeColumnWidth + column * dayWidth;
+    context.moveTo(x, gridTop);
+    context.lineTo(x, gridTop + gridHeight);
+  }
+
+  times.forEach((time, row) => {
+    const y = gridTop + dayHeaderHeight + row * hourHeight;
+    if (row > 0) {
+      context.moveTo(margin, y);
+      context.lineTo(margin + gridWidth, y);
+    }
+    context.fillText(time, margin + timeColumnWidth / 2, y + 18);
+  });
+  context.stroke();
+
+  context.textAlign = "left";
+  context.textBaseline = "alphabetic";
+
+  timetable.courses.forEach((course, courseIndex) => {
+    getTimetableBlocks(course).forEach((block) => {
+      if (block.day < 0 || block.day > 4) return;
+
+      const x = margin + timeColumnWidth + block.day * dayWidth;
+      const y =
+        gridTop + dayHeaderHeight + numericCredit(block.start) * hourHeight;
+      const blockHeight = Math.max(2, numericCredit(block.span) * hourHeight);
+
+      context.fillStyle =
+        course.color || COLORS[courseIndex % COLORS.length];
+      context.fillRect(x, y, dayWidth, blockHeight);
+      context.strokeStyle = "#ffffff";
+      context.lineWidth = 2;
+      context.strokeRect(x, y, dayWidth, blockHeight);
+
+      context.save();
+      context.beginPath();
+      context.rect(x + 8, y + 8, dayWidth - 16, blockHeight - 16);
+      context.clip();
+
+      context.fillStyle = "#ffffff";
+      context.font = "700 22px sans-serif";
+      drawTimetableText(
+        context,
+        course.name,
+        x + 12,
+        y + 30,
+        dayWidth - 24,
+        26,
+        2,
+      );
+      context.font = "500 18px sans-serif";
+      context.fillText(course.professor || "", x + 12, y + 82, dayWidth - 24);
+      context.font = "400 16px sans-serif";
+      drawTimetableText(
+        context,
+        block.room || course.room || "",
+        x + 12,
+        y + 108,
+        dayWidth - 24,
+        20,
+        2,
+      );
+      context.restore();
+    });
+  });
+
+  const safeName =
+    timetable.name.replace(/[\\/:*?"<>|]/g, "_").trim() || "시간표";
+  const downloadLink = document.createElement("a");
+  downloadLink.href = canvas.toDataURL("image/png");
+  downloadLink.download = `${safeName}.png`;
+  document.body.appendChild(downloadLink);
+  downloadLink.click();
+  downloadLink.remove();
+}
+
+function Timetable({
+  selectedCourses,
+  activeCourse,
+  focusedCourseId,
+  onCourseClick,
+  onToggleCourseLock,
+  timeSelections,
+  onAddTimeSelection,
+  onRemoveTimeSelection,
+  onToggleTimeSelectionLock,
+  onTimeSelectionStart,
+}) {
+  const previewBlocks = getTimetableBlocks(activeCourse, true);
+  const [draftSelection, setDraftSelection] = useState(null);
+  const dragSelectionRef = useRef(null);
+  const suppressCourseClickRef = useRef(false);
+  const longPressDuration = 550;
+
+  const getGridPoint = (event, gridElement) => {
+    const rect = gridElement.getBoundingClientRect();
+    const timeColumnWidth = 13;
+    const dayHeaderHeight = 14;
+    const contentX = event.clientX - rect.left - timeColumnWidth;
+    const contentY = event.clientY - rect.top - dayHeaderHeight;
+
+    if (contentX < 0 || contentY < 0) return null;
+
+    const dayWidth = (rect.width - timeColumnWidth) / 5;
+    const slotHeight = (rect.height - dayHeaderHeight) / 20;
+
+    return {
+      day: Math.max(0, Math.min(4, Math.floor(contentX / dayWidth))),
+      slot: Math.max(0, Math.min(19, Math.floor(contentY / slotHeight))),
+    };
+  };
+
+  const buildTimeSelection = (origin, current) => ({
+    dayStart: Math.min(origin.day, current.day),
+    dayEnd: Math.max(origin.day, current.day),
+    startSlot: Math.min(origin.slot, current.slot),
+    endSlot: Math.max(origin.slot, current.slot) + 1,
+  });
+
+  const selectionStyle = (selection) => {
+    const start = selection.startSlot / 2;
+    const span = (selection.endSlot - selection.startSlot) / 2;
+
+    return {
+      left: `calc(13px + ${selection.dayStart} * ((100% - 13px) / 5))`,
+      top: `calc(14px + ${start * 10}% - ${start * 1.4}px)`,
+      width: `calc(${selection.dayEnd - selection.dayStart + 1} * ((100% - 13px) / 5))`,
+      height: `calc(${span * 10}% - ${span * 1.4}px)`,
+    };
+  };
+
+  const selectionCellStyle = (cell, locked) => {
+    const start = cell.slot / 2;
+
+    return {
+      left: `calc(13px + ${cell.day} * ((100% - 13px) / 5))`,
+      top: `calc(14px + ${start * 10}% - ${start * 1.4}px)`,
+      width: "calc((100% - 13px) / 5)",
+      height: "calc(5% - 0.7px)",
+      boxSizing: "border-box",
+      backgroundColor: locked
+        ? "rgba(118, 84, 232, 0.13)"
+        : "rgba(118, 84, 232, 0.18)",
+      backgroundImage: "none",
+      border: "none",
+    };
+  };
+
+  const clearLongPressTimer = (drag) => {
+    if (drag && drag.longPressTimer !== null) {
+      window.clearTimeout(drag.longPressTimer);
+      drag.longPressTimer = null;
+    }
+  };
+
+  useEffect(
+    () => () => clearLongPressTimer(dragSelectionRef.current),
+    [],
   );
 
+  const resetDragSelection = (event) => {
+    clearLongPressTimer(dragSelectionRef.current);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragSelectionRef.current = null;
+    setDraftSelection(null);
+  };
+
+  const handleGridPointerDown = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    const point = getGridPoint(event, event.currentTarget);
+    if (!point) return;
+
+    const startedOnCourse = Boolean(
+      event.target.closest?.(".timetable-course-block"),
+    );
+    const courseId =
+      event.target.closest?.(".timetable-course-block")?.dataset.courseId ??
+      null;
+    const selectedRange = timeSelections.find((selection) =>
+      selection.cells.some(
+        (cell) => cell.day === point.day && cell.slot === point.slot,
+      ),
+    );
+    const longPressTarget = courseId
+      ? { type: "course", id: courseId }
+      : selectedRange
+        ? { type: "time", id: selectedRange.id }
+        : null;
+
+    if (!startedOnCourse) {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
+
+    dragSelectionRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: point,
+      moved: false,
+      startedOnCourse,
+      longPressTarget,
+      longPressTimer: null,
+      longPressTriggered: false,
+    };
+    const drag = dragSelectionRef.current;
+
+    if (longPressTarget) {
+      drag.longPressTimer = window.setTimeout(() => {
+        if (
+          dragSelectionRef.current !== drag ||
+          drag.moved ||
+          drag.longPressTriggered
+        ) {
+          return;
+        }
+
+        drag.longPressTriggered = true;
+        suppressCourseClickRef.current = true;
+        setDraftSelection(null);
+
+        if (longPressTarget.type === "course") {
+          onToggleCourseLock(longPressTarget.id);
+        } else {
+          onToggleTimeSelectionLock(longPressTarget.id);
+        }
+      }, longPressDuration);
+    }
+
+    setDraftSelection(buildTimeSelection(point, point));
+    onTimeSelectionStart();
+  };
+
+  const handleGridPointerMove = (event) => {
+    const drag = dragSelectionRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    if (
+      Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4
+    ) {
+      drag.moved = true;
+      clearLongPressTimer(drag);
+      if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      }
+    }
+
+    const point = getGridPoint(event, event.currentTarget);
+    if (!point) return;
+
+    event.preventDefault();
+    setDraftSelection(buildTimeSelection(drag.origin, point));
+  };
+
+  const handleGridPointerUp = (event) => {
+    const drag = dragSelectionRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    const point =
+      getGridPoint(event, event.currentTarget) ?? drag.origin;
+    clearLongPressTimer(drag);
+
+    if (drag.longPressTriggered) {
+      suppressCourseClickRef.current = true;
+    } else if (drag.moved) {
+      onAddTimeSelection(buildTimeSelection(drag.origin, point));
+      suppressCourseClickRef.current = true;
+    } else {
+      const selectedRange = timeSelections.find(
+        (selection) =>
+          selection.cells.some(
+            (cell) => cell.day === point.day && cell.slot === point.slot,
+          ),
+      );
+
+      if (selectedRange) {
+        if (!selectedRange.locked) {
+          onRemoveTimeSelection(selectedRange.id);
+        }
+        suppressCourseClickRef.current = true;
+      }
+    }
+
+    resetDragSelection(event);
+    window.setTimeout(() => {
+      suppressCourseClickRef.current = false;
+    }, 0);
+  };
+
+  const handleGridContextMenu = (event) => {
+    event.preventDefault();
+
+    if (suppressCourseClickRef.current) return;
+
+    const courseId =
+      event.target.closest?.(".timetable-course-block")?.dataset.courseId ??
+      null;
+
+    if (courseId) {
+      onToggleCourseLock(courseId);
+      return;
+    }
+
+    const point = getGridPoint(event, event.currentTarget);
+    if (!point) return;
+
+    const selectedRange = timeSelections.find((selection) =>
+      selection.cells.some(
+        (cell) => cell.day === point.day && cell.slot === point.slot,
+      ),
+    );
+
+    if (selectedRange) {
+      onToggleTimeSelectionLock(selectedRange.id);
+    }
+  };
+
   return (
-    <div className="timetable-grid relative mt-2 h-[442px] overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white">
+    <div
+      className="timetable-grid relative mt-2 h-[442px] touch-none select-none overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white"
+      onPointerDown={handleGridPointerDown}
+      onPointerMove={handleGridPointerMove}
+      onPointerUp={handleGridPointerUp}
+      onPointerCancel={resetDragSelection}
+      onContextMenu={handleGridContextMenu}
+    >
       <div className="grid h-full grid-cols-[13px_repeat(5,1fr)] grid-rows-[14px_repeat(10,minmax(0,1fr))]">
         <div className="border-b border-[#dedede]" />
         {DAYS.map((day) => (
@@ -138,33 +813,128 @@ function Timetable({ selectedIds, activeCourseId }) {
           </div>
         ))}
       </div>
-      {!previewCourse && selected.map((course, index) => (
-        <div
-          key={course.id}
-          className="timetable-course-block absolute overflow-hidden p-[2px] text-[8px] font-medium leading-[1.15] text-white shadow-[inset_0_0_0_0.5px_#fff]"
-          style={{
-            background: course.color || COLORS[index % COLORS.length],
-            left: `calc(13px + ${course.day} * ((100% - 13px) / 5))`,
-            top: `calc(14px + ${course.start * 10}% - ${course.start * 1.4}px)`,
-            width: "calc((100% - 13px) / 5)",
-            height: `calc(${course.span * 10}% - ${course.span * 1.4}px)`,
-          }}
-        >
-          <p className="timetable-course-title line-clamp-2 text-[9px] font-bold leading-[1.15]">{course.name}</p>
-          <p className="timetable-course-professor mt-[3px]">{course.professor}</p>
-          <p className="timetable-course-room mt-[2px] break-all text-[8px] leading-[1.15]">{course.room}</p>
-        </div>
-      ))}
-      {previewCourse &&
-        (previewCourse.previewDays || [previewCourse.day]).map((day) => (
+      {selectedCourses.flatMap((course, courseIndex) =>
+        getTimetableBlocks(course).map((block, blockIndex) => {
+          const focused = focusedCourseId === course.id;
+          const locked = Boolean(course.locked);
+          const baseColor = focused
+            ? "#f1edff"
+            : course.color || COLORS[courseIndex % COLORS.length];
+
+          return (
+            <button
+              type="button"
+              key={`${course.id}-${blockIndex}`}
+              aria-label={`${course.name} 강의 정보 보기 ${blockIndex + 1}`}
+              data-course-id={String(course.id)}
+              data-course-locked={locked ? "true" : "false"}
+              onClick={(event) => {
+                if (suppressCourseClickRef.current) {
+                  event.preventDefault();
+                  return;
+                }
+                onCourseClick(course);
+              }}
+              className={`timetable-course-block absolute flex appearance-none flex-col items-stretch justify-start overflow-hidden border-0 p-[2px] text-left text-[8px] font-medium leading-[1.15] shadow-[inset_0_0_0_0.5px_#fff] ${
+                focused ? "text-[#555]" : "text-white"
+              }`}
+              style={{
+                background: locked
+                  ? `repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.46) 0 1px, transparent 1px 8px), ${baseColor}`
+                  : baseColor,
+                left: `calc(13px + ${block.day} * ((100% - 13px) / 5))`,
+                top: `calc(14px + ${block.start * 10}% - ${block.start * 1.4}px)`,
+                width: "calc((100% - 13px) / 5)",
+                height: `calc(${block.span * 10}% - ${block.span * 1.4}px)`,
+              }}
+            >
+              <p className="timetable-course-title line-clamp-2 text-[9px] font-bold leading-[1.15]">{course.name}</p>
+              <p className="timetable-course-professor mt-[3px]">{course.professor}</p>
+              <p className="timetable-course-room mt-[2px] break-all text-[8px] leading-[1.15]">
+                {block.room || course.room}
+              </p>
+            </button>
+          );
+        }),
+      )}
+      {timeSelections.map((selection) => {
+        return (
           <div
-            key={`preview-${previewCourse.id}-${day}`}
-            className="absolute bg-[#f1edff]"
+            key={selection.id}
+            data-time-selection={selection.id}
+            data-time-selection-locked={selection.locked ? "true" : "false"}
+            className="contents"
+          >
+            {selection.cells.map((cell) => (
+              <div
+                key={timeCellKey(cell.day, cell.slot)}
+                data-time-selection-cell
+                className="pointer-events-none absolute z-[5]"
+                style={selectionCellStyle(cell, selection.locked)}
+              />
+            ))}
+            {selection.locked && (
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute z-[6] overflow-visible"
+                style={{
+                  left: "13px",
+                  top: "14px",
+                  width: "calc(100% - 13px)",
+                  height: "calc(100% - 14px)",
+                }}
+              >
+                <defs>
+                  <pattern
+                    id={`locked-time-pattern-${selection.id}`}
+                    width="8"
+                    height="8"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <path
+                      d="M-2 2L2-2M0 8L8 0M6 10L10 6"
+                      fill="none"
+                      stroke="rgba(118, 84, 232, 0.42)"
+                      strokeWidth="0.8"
+                    />
+                  </pattern>
+                </defs>
+                {selection.cells.map((cell) => (
+                  <rect
+                    key={`pattern-${timeCellKey(cell.day, cell.slot)}`}
+                    x={`${cell.day * 20}%`}
+                    y={`${cell.slot * 5}%`}
+                    width="20%"
+                    height="5%"
+                    fill={`url(#locked-time-pattern-${selection.id})`}
+                  />
+                ))}
+              </svg>
+            )}
+          </div>
+        );
+      })}
+      {draftSelection && (
+        <div
+          data-time-selection-draft
+          className="pointer-events-none absolute z-20 shadow-[inset_0_0_0_1px_#7654e8]"
+          style={{
+            ...selectionStyle(draftSelection),
+            backgroundColor: "rgba(118, 84, 232, 0.24)",
+          }}
+        />
+      )}
+      {activeCourse &&
+        previewBlocks.map((block, blockIndex) => (
+          <div
+            key={`preview-${activeCourse.id}-${blockIndex}`}
+            className="absolute z-10 shadow-[inset_0_0_0_0.5px_#fff]"
             style={{
-              left: `calc(13px + ${day} * ((100% - 13px) / 5))`,
-              top: `calc(14px + ${previewCourse.start * 10}% - ${previewCourse.start * 1.4}px)`,
+              backgroundColor: "rgba(118, 84, 232, 0.25)",
+              left: `calc(13px + ${block.day} * ((100% - 13px) / 5))`,
+              top: `calc(14px + ${block.start * 10}% - ${block.start * 1.4}px)`,
               width: "calc((100% - 13px) / 5)",
-              height: `calc(${previewCourse.span * 10}% - ${previewCourse.span * 1.4}px)`,
+              height: `calc(${block.span * 10}% - ${block.span * 1.4}px)`,
             }}
           />
         ))}
@@ -172,7 +942,15 @@ function Timetable({ selectedIds, activeCourseId }) {
   );
 }
 
-function CourseCard({ course, active, selected, onClick, onAdd }) {
+function CourseCard({
+  course,
+  active,
+  selected,
+  removable = false,
+  onClick,
+  onAdd,
+  onRemove,
+}) {
   return (
     <article
       onClick={onClick}
@@ -187,7 +965,18 @@ function CourseCard({ course, active, selected, onClick, onAdd }) {
           <h3 className="truncate text-[12px] font-bold leading-[14px]">{course.name}</h3>
           <p className="mt-0.5 text-[10px] font-medium leading-[11px]">{course.professor}</p>
         </div>
-        {active && !selected && (
+        {removable ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove();
+            }}
+            className="flex shrink-0 items-center gap-0.5 text-[9px] font-semibold text-brand"
+          >
+            <Trash2 size={11} /> 삭제
+          </button>
+        ) : active && !selected ? (
           <button
             type="button"
             onClick={(event) => {
@@ -198,14 +987,15 @@ function CourseCard({ course, active, selected, onClick, onAdd }) {
           >
             + 시간표에 추가
           </button>
-        )}
-        {selected && <span className="shrink-0 text-[9px] font-semibold text-brand">추가됨</span>}
+        ) : selected ? (
+          <span className="shrink-0 text-[9px] font-semibold text-brand">추가됨</span>
+        ) : null}
       </div>
       <p className="mt-0.5 truncate text-[9px] leading-[10px] text-[#aaa]">{course.time}</p>
       <p className="truncate text-[9px] leading-[10px] text-[#aaa]">강의 {course.room}</p>
       <div className="mt-0.5 flex items-end justify-between gap-2">
         <p className="truncate text-[9px] leading-[10px] text-[#aaa]">{course.meta}</p>
-        <p className={`max-w-[52%] truncate text-[8px] leading-[10px] ${active ? "text-brand" : "text-[#999]"}`}>
+        <p className={`max-w-[52%] truncate text-[9px] leading-[10px] ${active ? "text-brand" : "text-[#aaa]"}`}>
           비고: {course.note}
         </p>
       </div>
@@ -213,10 +1003,21 @@ function CourseCard({ course, active, selected, onClick, onAdd }) {
   );
 }
 
-function TimetableSheet({ onClose }) {
-  const [favorite, setFavorite] = useState(1);
-  const [items, setItems] = useState([1, 2, 3, 4]);
+function TimetableSheet({
+  items,
+  activeTimetableId,
+  onAdd,
+  onSelect,
+  onRename,
+  onDelete,
+  onToggleFavorite,
+  onDownload,
+  onClose,
+}) {
   const [closing, setClosing] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const closeTimer = useRef(null);
 
   const handleClose = () => {
@@ -231,6 +1032,20 @@ function TimetableSheet({ onClose }) {
     },
     [],
   );
+
+  const startRename = (item) => {
+    setEditingId(item.id);
+    setEditingName(item.name);
+  };
+
+  const finishRename = (item) => {
+    const nextName = editingName.trim();
+    if (nextName && nextName !== item.name) {
+      onRename(item.id, nextName);
+    }
+    setEditingId(null);
+    setEditingName("");
+  };
 
   return (
     <div
@@ -252,27 +1067,103 @@ function TimetableSheet({ onClose }) {
               시간표 목록 <ChevronUp size={13} strokeWidth={2.5} />
             </button>
           </div>
-          <button className="flex items-center gap-1 text-[13px] text-[#777]">
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex items-center gap-1 text-[13px] text-[#777]"
+          >
             <Plus size={15} /> 시간표 추가
           </button>
         </div>
+
+        {items.length === 0 && (
+          <p className="border-t border-[#eee] py-6 text-center text-[11px] text-[#999]">
+            시간표가 없습니다. 새 시간표를 추가해주세요.
+          </p>
+        )}
+
         {items.map((item) => (
-          <div key={item} className="flex h-[37px] items-center border-t border-[#eee]">
-            <button onClick={() => setFavorite(item)} aria-label="즐겨찾기">
+          <div
+            key={item.id}
+            className="flex h-[37px] items-center border-t border-[#eee]"
+          >
+            <button
+              type="button"
+              onClick={() => onToggleFavorite(item.id)}
+              aria-label={`${item.name} 즐겨찾기 ${
+                item.favorite ? "해제" : "추가"
+              }`}
+            >
               <Star
                 size={14}
-                className={favorite === item ? "fill-[#f6c900] text-[#f6c900]" : "text-[#bbb]"}
+                className={
+                  item.favorite
+                    ? "fill-[#f6c900] text-[#f6c900]"
+                    : "text-[#bbb]"
+                }
               />
             </button>
-            <button className="ml-2 flex-1 text-left text-[12px] font-semibold" onClick={handleClose}>
-              시간표 {item}
-            </button>
-            <div className="flex gap-3 text-[#999]">
-              <Download size={14} />
-              <Pencil size={14} />
+
+            {editingId === item.id ? (
+              <div className="ml-2 flex min-w-0 flex-1 items-center gap-1">
+                <input
+                  autoFocus
+                  value={editingName}
+                  onChange={(event) => setEditingName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") finishRename(item);
+                    if (event.key === "Escape") {
+                      setEditingId(null);
+                      setEditingName("");
+                    }
+                  }}
+                  maxLength={120}
+                  aria-label={`${item.name} 새 이름`}
+                  className="h-[27px] min-w-0 flex-1 border-b border-brand bg-transparent text-[12px] font-semibold outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => finishRename(item)}
+                  aria-label="시간표 이름 저장"
+                  className="text-brand"
+                >
+                  <Check size={14} />
+                </button>
+              </div>
+            ) : (
               <button
-                aria-label="시간표 삭제"
-                onClick={() => setItems((current) => current.filter((value) => value !== item))}
+                type="button"
+                className={`ml-2 min-w-0 flex-1 truncate text-left text-[12px] font-semibold ${
+                  activeTimetableId === item.id ? "text-brand" : ""
+                }`}
+                onClick={() => {
+                  onSelect(item.id);
+                  handleClose();
+                }}
+              >
+                {item.name}
+              </button>
+            )}
+
+            <div className="flex gap-3 text-[#999]">
+              <button
+                type="button"
+                onClick={() => onDownload(item)}
+                aria-label={`${item.name} 이미지 다운로드`}
+              >
+                <Download size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => startRename(item)}
+                aria-label={`${item.name} 이름 수정`}
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                type="button"
+                aria-label={`${item.name} 삭제`}
+                onClick={() => setDeleteTarget(item)}
               >
                 <Trash2 size={14} />
               </button>
@@ -280,6 +1171,39 @@ function TimetableSheet({ onClose }) {
           </div>
         ))}
       </section>
+
+      {deleteTarget && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/25 px-8"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <section className="w-full max-w-[300px] rounded-[15px] bg-white px-5 pb-4 pt-5 text-center shadow-lg">
+            <h2 className="text-[14px] font-bold">시간표를 삭제하시겠습니까?</h2>
+            <p className="mt-2 truncate text-[11px] text-[#888]">
+              {deleteTarget.name}
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="h-[36px] rounded-[10px] border border-[#ddd] text-[12px] text-[#777]"
+              >
+                아니오
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDelete(deleteTarget.id);
+                  setDeleteTarget(null);
+                }}
+                className="h-[36px] rounded-[10px] bg-brand text-[12px] font-semibold text-white"
+              >
+                예
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -312,17 +1236,21 @@ function Popover({
         >
           <ChevronLeft size={15} /> {title}
         </button>
-        {items.map((item) => (
-          <button
-            key={item}
-            onClick={() => onSelect(item)}
-            className={`block w-full border-t border-white/20 py-2 text-[11px] ${
-              selectedItems.includes(item) ? "font-semibold text-brand" : ""
-            }`}
-          >
-            {item}
-          </button>
-        ))}
+        <div className="no-scrollbar max-h-[360px] overflow-y-auto">
+          {items.map((item) => (
+            <button
+              key={item}
+              onClick={() => onSelect(item)}
+              className={`block w-full border-t border-white/20 py-2 text-[11px] ${
+                selectedItems.includes(item)
+                  ? "font-semibold text-brand"
+                  : ""
+              }`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
       </section>
     </div>
   );
@@ -583,16 +1511,118 @@ const courseLiberalAreaOptions = [
 
 const courseCreditOptions = ["P/N", "1학점", "2학점", "3학점", "4학점"];
 
-function CourseInputForm({ initial, onSave, onCancel }) {
+function formatCourseCredits(value) {
+  const numericCredits = Number(value);
+  if (!Number.isFinite(numericCredits)) return "";
+  const formatted = Number.isInteger(numericCredits)
+    ? String(numericCredits)
+    : String(numericCredits).replace(/\.0+$/, "");
+  return `${formatted}학점`;
+}
+
+function inferCourseArea(category = "") {
+  if (category.includes("제1영역")) return "인간과 소통";
+  if (category.includes("제2영역")) return "사회와 경제";
+  if (category.includes("제3영역")) return "과학과 기술";
+  if (category.includes("제4영역")) return "예술과 문화";
+  if (category.includes("제5영역")) return "융합과 혁신";
+  if (category.includes("제6영역")) return "디지털리터러시";
+  if (category.includes("교양필수") || category === "교필") return "교양필수";
+  if (category.includes("교양선택") || category === "교선") return "교양선택";
+  if (category.includes("일반선택") || category === "일선") return "일반선택";
+  if (category.includes("교직")) return "교직";
+  return "";
+}
+
+function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
   const [name, setName] = useState(initial?.name || "");
   const [area, setArea] = useState(initial?.area || "");
   const [credits, setCredits] = useState(initial?.credits || "");
   const [openMenu, setOpenMenu] = useState(null);
+  const [selectedCourse, setSelectedCourse] = useState(() =>
+    initial?.name ? { name: initial.name } : null,
+  );
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [showLiberalAreas, setShowLiberalAreas] = useState(
     courseLiberalAreaOptions.includes(initial?.area),
   );
+  const courseSearchRef = useRef(null);
   const areaMenuRef = useRef(null);
   const creditsMenuRef = useRef(null);
+  const searchRequestId = useRef(0);
+
+  useEffect(() => {
+    const requestId = searchRequestId.current + 1;
+    searchRequestId.current = requestId;
+    const normalizedName = name.trim();
+
+    if (
+      normalizedName.length < 2 ||
+      selectedCourse?.name === normalizedName
+    ) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      setSearchError("");
+      return undefined;
+    }
+
+    const controller = new AbortController();
+
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true);
+      setSearchError("");
+      setSearchOpen(true);
+
+      searchCourses(
+        {
+          semesterId,
+          query: normalizedName,
+          size: 100,
+        },
+        controller.signal,
+      )
+        .then((result) => {
+          if (searchRequestId.current !== requestId) return;
+          setSearchResults(result.items);
+        })
+        .catch((error) => {
+          if (error.name === "AbortError") return;
+          if (searchRequestId.current !== requestId) return;
+          setSearchResults([]);
+          setSearchError("강의를 검색하지 못했습니다. 직접 입력할 수 있어요.");
+        })
+        .finally(() => {
+          if (searchRequestId.current === requestId) {
+            setSearchLoading(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [name, selectedCourse, semesterId]);
+
+  useEffect(() => {
+    if (!searchOpen) return undefined;
+
+    const closeSearchOnOutsideClick = (event) => {
+      if (
+        courseSearchRef.current &&
+        !courseSearchRef.current.contains(event.target)
+      ) {
+        setSearchOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeSearchOnOutsideClick);
+    return () =>
+      document.removeEventListener("pointerdown", closeSearchOnOutsideClick);
+  }, [searchOpen]);
 
   useEffect(() => {
     if (!openMenu) return undefined;
@@ -613,15 +1643,96 @@ function CourseInputForm({ initial, onSave, onCancel }) {
 
   return (
     <section className="relative rounded-[13px] border border-[#e5e5e5] px-4 pb-2.5 pt-3">
-      <label className="block text-[10px] text-[#777]">과목명</label>
-      <div className="flex h-[31px] items-center border-b border-[#ddd]">
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="과목명을 입력하세요"
-          className="min-w-0 flex-1 text-[13px] outline-none placeholder:text-[#aaa]"
-        />
-        <Search size={12} className="text-[#888]" />
+      <div ref={courseSearchRef} className="relative">
+        <label className="block text-[10px] text-[#777]">과목명</label>
+        <div className="flex h-[31px] items-center border-b border-[#ddd]">
+          <input
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              setSelectedCourse(null);
+              setSearchResults([]);
+              setSearchError("");
+              setSearchOpen(false);
+            }}
+            onFocus={() => {
+              if (searchLoading || searchResults.length > 0 || searchError) {
+                setSearchOpen(true);
+              }
+            }}
+            placeholder="과목명을 입력하세요"
+            className="min-w-0 flex-1 text-[13px] outline-none placeholder:text-[#aaa]"
+          />
+          <Search
+            size={12}
+            className={searchLoading ? "animate-pulse text-brand" : "text-[#888]"}
+          />
+        </div>
+
+        {searchOpen && name.trim().length >= 2 && (
+          <div className="absolute left-0 right-0 top-full z-40 max-h-[184px] overflow-y-auto border-x border-b border-[#d8d8d8] bg-white shadow-[0_3px_8px_rgba(0,0,0,0.08)]">
+            {searchLoading && (
+              <p className="px-2 py-3 text-center text-[11px] text-[#999]">
+                강의를 검색하고 있어요.
+              </p>
+            )}
+
+            {!searchLoading &&
+              searchResults.map((course) => (
+                <button
+                  type="button"
+                  key={course.id}
+                  onClick={() => {
+                    const nextCredits = formatCourseCredits(course.credits);
+                    const inferredArea = inferCourseArea(course.category);
+
+                    setName(course.name);
+                    setSelectedCourse(course);
+                    if (nextCredits) setCredits(nextCredits);
+                    if (inferredArea) {
+                      setArea(inferredArea);
+                      setShowLiberalAreas(
+                        courseLiberalAreaOptions.includes(inferredArea),
+                      );
+                    } else {
+                      setArea("");
+                      setShowLiberalAreas(false);
+                    }
+                    setSearchResults([]);
+                    setSearchError("");
+                    setSearchOpen(false);
+                  }}
+                  className="block w-full border-b border-[#ededed] px-2 py-2 text-left last:border-b-0 hover:bg-[#f5f5f5]"
+                >
+                  <span className="block truncate text-[12px] font-medium text-[#222]">
+                    {course.name}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[10px] text-[#999]">
+                    {course.courseCode}
+                    {course.category ? ` · ${course.category}` : ""}
+                    {course.credits !== null &&
+                    course.credits !== undefined
+                      ? ` · ${formatCourseCredits(course.credits)}`
+                      : ""}
+                  </span>
+                </button>
+              ))}
+
+            {!searchLoading && searchError && (
+              <p className="px-2 py-3 text-center text-[11px] text-[#d26b5f]">
+                {searchError}
+              </p>
+            )}
+
+            {!searchLoading &&
+              !searchError &&
+              searchResults.length === 0 && (
+                <p className="px-2 py-3 text-center text-[11px] text-[#999]">
+                  검색 결과가 없습니다. 직접 입력할 수 있어요.
+                </p>
+              )}
+          </div>
+        )}
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-5">
@@ -754,7 +1865,20 @@ function CourseInputForm({ initial, onSave, onCancel }) {
         </button>
         <button
           type="button"
-          onClick={() => name.trim() && onSave({ name: name.trim(), area, credits })}
+          onClick={() =>
+            name.trim() &&
+            onSave({
+              name: name.trim(),
+              area,
+              credits,
+              courseCode:
+                selectedCourse?.courseCode ?? initial?.courseCode ?? null,
+              semesterId:
+                selectedCourse?.semesterId ?? initial?.semesterId ?? null,
+              sourceCategory:
+                selectedCourse?.category ?? initial?.sourceCategory ?? null,
+            })
+          }
           className="h-[31px] rounded-[11px] bg-brand px-5 text-[12px] font-semibold text-white"
         >
           저장
@@ -764,52 +1888,308 @@ function CourseInputForm({ initial, onSave, onCancel }) {
   );
 }
 
-function GraduationModal({ onClose }) {
+function numericCredit(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+}
+
+function displayCredit(value) {
+  const numericValue = numericCredit(value);
+  return Number.isInteger(numericValue)
+    ? String(numericValue)
+    : String(numericValue).replace(/\.0+$/, "");
+}
+
+function progressPercentage(completed, required) {
+  const requiredCredits = numericCredit(required);
+  if (requiredCredits <= 0) return 0;
+  return Math.min(
+    100,
+    Math.max(0, (numericCredit(completed) / requiredCredits) * 100),
+  );
+}
+
+function graduationErrorMessage(error) {
+  if (error instanceof ApiError) {
+    if (error.status === 401 || error.code === "AUTH_SESSION_EXPIRED") {
+      return "현재 임시 로그인은 백엔드 로그인 세션을 만들지 않습니다. 학교 이메일 OTP 로그인 연결 후 졸업요건을 확인할 수 있습니다.";
+    }
+
+    if (error.status === 400 || error.code === "INVALID_ACADEMIC_QUERY") {
+      return "졸업판정에 필요한 입학연도, 학생 구분, 전공 방식 정보가 없습니다. 사용자 프로필 API에 해당 정보가 먼저 저장되어야 합니다.";
+    }
+
+    return error.message;
+  }
+
+  return "졸업요건 정보를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
+}
+
+function GraduationProgress({ label, completed, required, detail }) {
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 px-6" onClick={onClose}>
+    <div>
+      <div className="flex items-center justify-between text-[10px] font-semibold">
+        <span>
+          {label}
+          {detail && (
+            <span className="ml-1 font-normal text-[#999]">{detail}</span>
+          )}
+        </span>
+        <span>
+          {displayCredit(completed)}/{displayCredit(required)} 학점
+        </span>
+      </div>
+      <div className="mt-1 h-[5px] overflow-hidden rounded-full bg-[#ececee]">
+        <div
+          className="h-full rounded-full bg-brand transition-[width]"
+          style={{ width: `${progressPercentage(completed, required)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function GraduationModal({ semesterId, onClose }) {
+  const [evaluation, setEvaluation] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retryIndex, setRetryIndex] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+
+    getGraduationEvaluation(
+      { semesterId },
+      controller.signal,
+    )
+      .then(setEvaluation)
+      .catch((requestError) => {
+        if (requestError.name === "AbortError") return;
+        setEvaluation(null);
+        setError(graduationErrorMessage(requestError));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [retryIndex, semesterId]);
+
+  const rule = evaluation?.rule ?? {};
+  const completed = evaluation?.completedCredits ?? {};
+  const requiredCredits = rule.credits ?? {};
+  const liberalRequirements = rule.liberalArts ?? {};
+
+  const majorMinimum =
+    numericCredit(requiredCredits.primaryMajor) ||
+    numericCredit(requiredCredits.majorFoundation) +
+      numericCredit(requiredCredits.majorRequired) +
+      numericCredit(requiredCredits.majorElective);
+  const majorCompleted =
+    numericCredit(completed.primaryMajor) ||
+    numericCredit(completed.majorFoundation) +
+      numericCredit(completed.majorRequired) +
+      numericCredit(completed.majorElective);
+  const liberalMinimum =
+    numericCredit(liberalRequirements.totalMinimum) ||
+    numericCredit(liberalRequirements.required) +
+      numericCredit(liberalRequirements.elective);
+  const liberalCompleted =
+    numericCredit(completed.liberalTotal) ||
+    numericCredit(completed.liberalRequired) +
+      numericCredit(completed.liberalElective);
+
+  const detailRows = [
+    {
+      label: "전공기초",
+      completed: completed.majorFoundation,
+      required: requiredCredits.majorFoundation,
+    },
+    {
+      label: "전공필수",
+      completed: completed.majorRequired,
+      required: requiredCredits.majorRequired,
+    },
+    {
+      label: "전공선택",
+      completed: completed.majorElective,
+      required: requiredCredits.majorElective,
+    },
+    {
+      label: "교양필수",
+      completed: completed.liberalRequired,
+      required: liberalRequirements.required,
+    },
+    {
+      label: "교양선택",
+      completed: completed.liberalElective,
+      required: liberalRequirements.elective,
+    },
+  ].filter((item) => numericCredit(item.required) > 0);
+
+  const remainingItems = [
+    ...(evaluation?.creditGaps ?? []).map((gap) => ({
+      key: `credit-${gap.code}`,
+      text: `${gap.label} ${displayCredit(gap.missing)}학점`,
+    })),
+    ...(evaluation?.areaGaps ?? []).map((gap) => ({
+      key: `area-${gap.area}`,
+      text: `${gap.area} ${
+        numericCredit(gap.missingCourses) > 0
+          ? `${gap.missingCourses}과목`
+          : `${displayCredit(gap.missingCredits)}학점`
+      }`,
+    })),
+    ...(evaluation?.requiredCourseGaps ?? []).map((gap, index) => ({
+      key: `course-${gap.course?.courseCode ?? index}`,
+      text: gap.course?.courseName
+        ? `필수과목 ${gap.course.courseName}`
+        : "필수과목 이수 필요",
+    })),
+  ];
+
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 px-6"
+      onClick={onClose}
+    >
       <section
-        className="w-full max-w-[354px] rounded-[15px] bg-white px-6 pb-3 pt-7 shadow-lg"
+        className="w-full max-w-[354px] overflow-hidden rounded-[15px] bg-white px-6 pb-3 pt-7 shadow-lg"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between text-[13px] font-bold">
-          <span>전체</span>
-          <span>91 / 126 학점</span>
-        </div>
-        <div className="mt-1.5 h-[6px] overflow-hidden rounded-full bg-[#ececee]">
-          <div className="h-full w-[75%] rounded-full bg-brand" />
+        <div className="max-h-[66dvh] overflow-y-auto">
+          {loading && (
+            <div className="flex min-h-[220px] items-center justify-center text-[12px] text-[#999]">
+              졸업요건을 확인하고 있어요.
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
+              <GraduationCap size={28} className="text-brand" />
+              <h2 className="mt-3 text-[14px] font-bold">
+                졸업요건을 확인할 수 없습니다
+              </h2>
+              <p className="mt-2 break-keep text-[11px] leading-5 text-[#888]">
+                {error}
+              </p>
+              <button
+                type="button"
+                onClick={() => setRetryIndex((current) => current + 1)}
+                className="mt-4 rounded-[10px] border border-brand px-4 py-2 text-[11px] font-semibold text-brand"
+              >
+                다시 시도
+              </button>
+            </div>
+          )}
+
+          {!loading && !error && evaluation && (
+            <>
+              <div className="flex items-center justify-between text-[13px] font-bold">
+                <span>전체</span>
+                <span>
+                  {displayCredit(completed.total)} /{" "}
+                  {displayCredit(requiredCredits.total)} 학점
+                </span>
+              </div>
+              <div className="mt-1.5 h-[6px] overflow-hidden rounded-full bg-[#ececee]">
+                <div
+                  className="h-full rounded-full bg-brand transition-[width]"
+                  style={{
+                    width: `${progressPercentage(
+                      completed.total,
+                      requiredCredits.total,
+                    )}%`,
+                  }}
+                />
+              </div>
+
+              <div className="ml-1 mt-3 space-y-3 border-l-2 border-[#e7e7e7] pl-3">
+                {majorMinimum > 0 && (
+                  <GraduationProgress
+                    label="전공"
+                    completed={majorCompleted}
+                    required={majorMinimum}
+                    detail={`(최소 ${displayCredit(majorMinimum)}학점)`}
+                  />
+                )}
+
+                {liberalMinimum > 0 && (
+                  <GraduationProgress
+                    label="교양"
+                    completed={liberalCompleted}
+                    required={liberalMinimum}
+                    detail={
+                      numericCredit(liberalRequirements.totalMaximum) > 0
+                        ? `(최대 ${displayCredit(
+                            liberalRequirements.totalMaximum,
+                          )}학점 인정)`
+                        : `(최소 ${displayCredit(liberalMinimum)}학점)`
+                    }
+                  />
+                )}
+
+                {detailRows.length > 0 && (
+                  <div className="space-y-2 text-[10px]">
+                    {detailRows.map((item) => (
+                      <p
+                        key={item.label}
+                        className="flex items-center justify-between"
+                      >
+                        <span>{item.label}</span>
+                        <span>
+                          {displayCredit(item.completed)}/
+                          {displayCredit(item.required)} 학점
+                        </span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-7 text-[10px]">
+                <h3 className="mb-3 text-[12px] font-bold">
+                  남은 졸업요건
+                </h3>
+                {remainingItems.length > 0 ? (
+                  <div className="space-y-3">
+                    {remainingItems.map((item) => (
+                      <p key={item.key}>· {item.text}</p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[#777]">
+                    {evaluation.automaticRequirementsSatisfied
+                      ? "자동 판정 가능한 졸업요건을 모두 충족했습니다."
+                      : "표시할 부족 요건이 없습니다."}
+                  </p>
+                )}
+              </div>
+
+              {(evaluation.nonAutomaticItems?.length > 0 ||
+                evaluation.warnings?.length > 0) && (
+                <div className="mt-5 rounded-[10px] bg-[#faf8ff] p-3 text-[9px] leading-4 text-[#777]">
+                  <h3 className="mb-1 text-[10px] font-semibold text-[#555]">
+                    추가 확인 필요
+                  </h3>
+                  {evaluation.nonAutomaticItems?.map((item) => (
+                    <p key={item.code}>· {item.title}</p>
+                  ))}
+                  {evaluation.warnings?.map((warning) => (
+                    <p key={warning.code}>· {warning.message}</p>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
-        <div className="ml-1 mt-2 border-l-2 border-[#e7e7e7] pl-3 text-[10px]">
-          <div className="flex justify-between font-semibold">
-            <span>전공 <span className="font-normal text-[#999]">(최소 63학점)</span></span>
-            <span>42/63 학점</span>
-          </div>
-          <div className="mt-1 h-[5px] overflow-hidden rounded-full bg-[#ececee]">
-            <div className="h-full w-[78%] rounded-full bg-brand" />
-          </div>
-          <div className="mt-2 space-y-2">
-            <p>전공필수　 6/12 학점</p>
-            <p>전공선택　 36/30 학점</p>
-            <p className="pt-1 font-semibold">
-              교양 <span className="font-normal text-[#999]">(최대 46학점까지 인정)</span>
-            </p>
-            <p>교양필수　 13/12 학점</p>
-            <p>전공선택　 30/24 학점</p>
-          </div>
-        </div>
-
-        <div className="mt-7 text-[10px]">
-          <h3 className="mb-3 text-[12px] font-bold">남은 필수 과목</h3>
-          <div className="space-y-3">
-            <p>· 졸업논문 (캡스톤디자인2)</p>
-            <p>· 교양선택 2영역</p>
-            <p>· 전공필수 (운영체제론)</p>
-          </div>
-        </div>
         <button
           type="button"
           onClick={onClose}
-          className="mt-7 w-full border-t border-[#eee] py-3 text-[15px] font-semibold text-brand"
+          className="mt-5 w-full border-t border-[#eee] py-3 text-[15px] font-semibold text-brand"
         >
           확인
         </button>
@@ -818,31 +2198,143 @@ function GraduationModal({ onClose }) {
   );
 }
 
-function MyCoursesPage({ onTimetable, onMyPage }) {
+function mapCompletedCourse(course) {
+  const credits = Number(course.credits);
+  const creditLabel =
+    Number.isFinite(credits) && credits > 0
+      ? `${Number.isInteger(credits) ? credits : String(credits)}학점`
+      : "P/N";
+
+  return {
+    id: course.id,
+    name: course.courseName,
+    area: course.area || course.category || "영역 미선택",
+    credits: creditLabel,
+    courseCode: course.courseCode,
+    semesterId: course.semester,
+    sourceCategory: course.category,
+    status: course.status,
+    inputSource: course.inputSource,
+  };
+}
+
+function completedCourseRequest(values, fallbackSemesterId) {
+  const isLiberalArea = courseLiberalAreaOptions.includes(values.area);
+  const numericCredits =
+    values.credits === "P/N"
+      ? 0
+      : Number.parseFloat(String(values.credits).replace("학점", ""));
+
+  return {
+    courseCode: values.courseCode || null,
+    courseName: values.name,
+    credits: Number.isFinite(numericCredits) ? numericCredits : 0,
+    category: isLiberalArea
+      ? "교양선택"
+      : values.area || values.sourceCategory || "일반선택",
+    area: isLiberalArea ? values.area : null,
+    semester: values.semesterId || fallbackSemesterId || null,
+    status: "COMPLETED",
+  };
+}
+
+function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
   const [courses, setCourses] = useState([]);
   const [drafts, setDrafts] = useState([
     { key: "initial", editingId: null, initial: null },
   ]);
   const [showGraduation, setShowGraduation] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [requestError, setRequestError] = useState("");
+  const [savingDraftKey, setSavingDraftKey] = useState(null);
 
-  const saveCourse = (draft, values) => {
-    const nextCourse = {
-      id: draft.editingId || Date.now(),
-      name: values.name,
-      area: values.area || "영역 미선택",
-      credits: values.credits || "학점 미선택",
-    };
-    setCourses((current) =>
-      draft.editingId
-        ? current.map((course) => (course.id === draft.editingId ? nextCourse : course))
-        : [...current, nextCourse],
-    );
-    setDrafts((current) => current.filter((item) => item.key !== draft.key));
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setRequestError("");
+
+    getCompletedCourses(controller.signal)
+      .then((items) => {
+        setCourses((items ?? []).map(mapCompletedCourse));
+      })
+      .catch((error) => {
+        if (error.name === "AbortError") return;
+        setRequestError(
+          error.status === 401
+            ? "로그인 세션이 없어 저장된 강의를 불러오지 못했습니다."
+            : error.message || "저장된 강의를 불러오지 못했습니다.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  const saveCourse = async (draft, values) => {
+    setSavingDraftKey(draft.key);
+    setRequestError("");
+
+    try {
+      const request = completedCourseRequest(values, semesterId);
+      const updateRequest =
+        draft.editingId &&
+        !courseLiberalAreaOptions.includes(values.area)
+          ? { ...request, area: "" }
+          : request;
+      const saved = draft.editingId
+        ? await updateCompletedCourse(draft.editingId, updateRequest)
+        : await createCompletedCourse(request);
+      const nextCourse = mapCompletedCourse(saved);
+
+      setCourses((current) =>
+        draft.editingId
+          ? current.map((course) =>
+              course.id === draft.editingId ? nextCourse : course,
+            )
+          : [...current, nextCourse],
+      );
+      setDrafts((current) =>
+        current.filter((item) => item.key !== draft.key),
+      );
+    } catch (error) {
+      setRequestError(
+        error.status === 401
+          ? "로그인 세션이 없어 강의를 저장하지 못했습니다."
+          : error.message || "강의를 저장하지 못했습니다.",
+      );
+    } finally {
+      setSavingDraftKey(null);
+    }
+  };
+
+  const removeCompletedCourse = async (course) => {
+    setRequestError("");
+
+    try {
+      await deleteCompletedCourse(course.id);
+      setCourses((current) =>
+        current.filter((item) => item.id !== course.id),
+      );
+      setDrafts((current) =>
+        current.filter((draft) => draft.editingId !== course.id),
+      );
+    } catch (error) {
+      setRequestError(
+        error.status === 401
+          ? "로그인 세션이 없어 강의를 삭제하지 못했습니다."
+          : error.message || "강의를 삭제하지 못했습니다.",
+      );
+    }
   };
 
   const editCourse = (course) => {
     setDrafts((current) => {
-      if (current.some((draft) => draft.editingId === course.id)) return current;
+      if (current.some((draft) => draft.editingId === course.id)) {
+        return current;
+      }
+
       return [
         ...current,
         {
@@ -891,6 +2383,7 @@ function MyCoursesPage({ onTimetable, onMyPage }) {
             <CourseInputForm
               key={draft.key}
               initial={draft.initial}
+              semesterId={semesterId}
               onSave={(values) => saveCourse(draft, values)}
               onCancel={() =>
                 setDrafts((current) =>
@@ -900,6 +2393,22 @@ function MyCoursesPage({ onTimetable, onMyPage }) {
             />
           ))}
         </div>
+
+        {savingDraftKey && (
+          <p className="mt-2 text-center text-[10px] text-brand">
+            강의를 저장하고 있습니다.
+          </p>
+        )}
+        {requestError && (
+          <p className="mt-2 rounded-[10px] bg-red-50 px-3 py-2 text-[10px] leading-4 text-red-600">
+            {requestError}
+          </p>
+        )}
+        {loading && (
+          <p className="mt-4 text-center text-[11px] text-[#999]">
+            저장된 강의를 불러오는 중입니다.
+          </p>
+        )}
 
         <div className="saved-course-list no-scrollbar mt-2 max-h-[335px] space-y-2 overflow-y-auto">
           {courses.map((course) => (
@@ -918,9 +2427,7 @@ function MyCoursesPage({ onTimetable, onMyPage }) {
               </button>
               <button
                 className="p-2 text-[#999]"
-                onClick={() =>
-                  setCourses((current) => current.filter((item) => item.id !== course.id))
-                }
+                onClick={() => removeCompletedCourse(course)}
                 aria-label={`${course.name} 삭제`}
               >
                 <Trash2 size={13} />
@@ -953,7 +2460,12 @@ function MyCoursesPage({ onTimetable, onMyPage }) {
           onTimetable={onTimetable}
           onMyPage={onMyPage}
         />
-        {showGraduation && <GraduationModal onClose={() => setShowGraduation(false)} />}
+        {showGraduation && (
+          <GraduationModal
+            semesterId={semesterId}
+            onClose={() => setShowGraduation(false)}
+          />
+        )}
       </div>
     </main>
   );
@@ -965,42 +2477,907 @@ export default function App() {
   const [selectedTimetableId, setSelectedTimetableId] = useState(null);
   const [timetableReturnTab, setTimetableReturnTab] = useState("mytimetablelist");
   const [user, setUser] = useState(null);
-  const [selectedIds, setSelectedIds] = useState([1, 2]);
-  const [activeCourse, setActiveCourse] = useState(null);
+  const [currentSemesterId, setCurrentSemesterId] = useState(
+    FALLBACK_SEMESTER_ID,
+  );
+  const [timetables, setTimetables] = useState(() =>
+    createInitialTimetables(FALLBACK_SEMESTER_ID),
+  );
+  const [activeTimetableId, setActiveTimetableId] = useState(1);
+  const [activeCourseId, setActiveCourseId] = useState(null);
+  const [focusedCourseId, setFocusedCourseId] = useState(null);
+  const [timeSelections, setTimeSelections] = useState([]);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [majors, setMajors] = useState([]);
+  const [selectedDepartment, setSelectedDepartment] = useState(null);
+  const [selectedCollegeCode, setSelectedCollegeCode] = useState(null);
+  const [departmentOptions, setDepartmentOptions] = useState([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
+  const [departmentsError, setDepartmentsError] = useState("");
   const [grades, setGrades] = useState([]);
   const [otherGrade, setOtherGrade] = useState(false);
   const [sort, setSort] = useState("");
   const [overlay, setOverlay] = useState(null);
   const [filterAnchor, setFilterAnchor] = useState(null);
+  const [courseConflict, setCourseConflict] = useState(null);
   const [showComplete, setShowComplete] = useState(false);
+  const [generatedScheduleCount, setGeneratedScheduleCount] = useState(0);
+  const [optimizationLoading, setOptimizationLoading] = useState(false);
+  const [optimizationError, setOptimizationError] = useState(null);
+  const [timetableSyncError, setTimetableSyncError] = useState("");
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const dragStartY = useRef(null);
   const dragStartX = useRef(null);
   const dragPointerId = useRef(null);
+  const nextTimetableId = useRef(2);
+  const nextTimeSelectionId = useRef(1);
+  const optimizationAbortRef = useRef(null);
 
-  const courses = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    const filtered = initialCourses.filter(
-      (course) =>
-        !normalized ||
-        course.name.toLowerCase().includes(normalized) ||
-        course.professor.toLowerCase().includes(normalized),
+  const activeTimetable =
+    timetables.find((item) => item.id === activeTimetableId) ?? null;
+  const selectedCourses = activeTimetable?.courses ?? [];
+  const focusedCourse =
+    selectedCourses.find((course) => course.id === focusedCourseId) ?? null;
+
+  const setSelectedCourses = (nextCourses) => {
+    setTimetables((current) =>
+      current.map((item) => {
+        if (item.id !== activeTimetableId) return item;
+        return {
+          ...item,
+          courses:
+            typeof nextCourses === "function"
+              ? nextCourses(item.courses)
+              : nextCourses,
+        };
+      }),
     );
-    if (sort === "이름순") return [...filtered].sort((a, b) => a.name.localeCompare(b.name, "ko"));
-    if (sort === "인기순") return [...filtered].reverse();
-    return filtered;
-  }, [query, sort]);
-
-  const addCourse = (id) => {
-    setSelectedIds((current) => (current.includes(id) ? current : [...current, id]));
-    setActiveCourse(null);
   };
 
-  const autoGenerate = () => {
-    setSelectedIds([1, 2, 4]);
-    setShowComplete(true);
+  const persistTimetableCourses = async (timetable, nextCourses) => {
+    if (!timetable) return null;
+
+    const sections = toTimetableSectionRequests(nextCourses);
+    const saved = timetable.serverId
+      ? await replaceTimetableSections(timetable.serverId, sections)
+      : await createTimetable({
+          name: timetable.name,
+          semesterId: timetable.semesterId ?? currentSemesterId,
+          sections,
+        });
+
+    setTimetables((current) =>
+      current.map((item) =>
+        item.id === timetable.id
+          ? {
+              ...item,
+              serverId: saved?.id ?? timetable.serverId,
+              semesterId: saved?.semesterId ?? item.semesterId,
+              totalCredits: saved?.totalCredits,
+              courses: nextCourses,
+            }
+          : item,
+      ),
+    );
+    setTimetableSyncError("");
+    return saved;
+  };
+
+  useEffect(
+    () => () => {
+      optimizationAbortRef.current?.abort();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    getSemesters(controller.signal)
+      .then((semesters) => {
+        const latestSemester = findLatestSemester(semesters);
+        if (!latestSemester?.id) return;
+
+        setCurrentSemesterId(latestSemester.id);
+        setTimetables((current) =>
+          current.map((item) => {
+            if (item.serverId || item.semesterId === latestSemester.id) {
+              return item;
+            }
+
+            return {
+              ...item,
+              semesterId: latestSemester.id,
+              courses: [],
+            };
+          }),
+        );
+        setActiveCourseId(null);
+        setFocusedCourseId(null);
+        setTimeSelections([]);
+      })
+      .catch((error) => {
+        if (error.name === "AbortError") return;
+        // 학기 조회에 실패하면 화면은 fallback 학기로 계속 동작합니다.
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (authStep !== "app") return undefined;
+
+    const controller = new AbortController();
+
+    getCurrentUser(controller.signal)
+      .then((profile) => {
+        setUser((current) => mapUserProfile(profile, current ?? {}));
+      })
+      .catch((error) => {
+        if (error.name === "AbortError" || error.status === 401) return;
+        setTimetableSyncError(
+          error.message || "사용자 정보를 불러오지 못했습니다.",
+        );
+      });
+
+    return () => controller.abort();
+  }, [authStep]);
+
+  useEffect(() => {
+    if (authStep !== "app") return undefined;
+
+    const controller = new AbortController();
+    setDepartmentsLoading(true);
+    setDepartmentsError("");
+
+    getAllDepartments({ currentOnly: true }, controller.signal)
+      .then(setDepartmentOptions)
+      .catch((error) => {
+        if (error.name === "AbortError") return;
+        setDepartmentOptions([]);
+        setDepartmentsError(
+          error.message || "학과 필터를 불러오지 못했습니다.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDepartmentsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [authStep]);
+
+  useEffect(() => {
+    if (authStep !== "app") return undefined;
+
+    const controller = new AbortController();
+
+    getTimetables(controller.signal)
+      .then(async (summaries) => {
+        const details = await Promise.all(
+          (summaries ?? []).map((summary) =>
+            getTimetable(summary.id, controller.signal),
+          ),
+        );
+
+        if (controller.signal.aborted) return;
+
+        if (details.length === 0) {
+          const fallback = createInitialTimetables(currentSemesterId);
+          setTimetables(fallback);
+          setActiveTimetableId(fallback[0].id);
+          return;
+        }
+
+        setTimetables((current) =>
+          details.map((detail) => {
+            const timetable = mapTimetableResponse(detail);
+            const previous = current.find(
+              (item) => item.serverId === timetable.serverId,
+            );
+            return {
+              ...timetable,
+              favorite: previous?.favorite ?? false,
+            };
+          }),
+        );
+        setActiveTimetableId(`server-${details[0].id}`);
+        setTimetableSyncError("");
+      })
+      .catch((error) => {
+        if (error.name === "AbortError" || error.status === 401) return;
+        setTimetableSyncError(
+          error.message || "저장된 시간표를 불러오지 못했습니다.",
+        );
+      });
+
+    return () => controller.abort();
+  }, [authStep, currentSemesterId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query.trim());
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const collegeOptions = useMemo(() => {
+    const colleges = new Map();
+
+    departmentOptions.forEach((department) => {
+      if (!department.collegeCode || !department.collegeName) return;
+      if (!colleges.has(department.collegeCode)) {
+        colleges.set(department.collegeCode, department.collegeName);
+      }
+    });
+
+    return [...colleges].map(([code, name]) => ({ code, name }));
+  }, [departmentOptions]);
+
+  const selectedCollegeDepartments = useMemo(
+    () =>
+      departmentOptions
+        .filter(
+          (department) => department.collegeCode === selectedCollegeCode,
+        )
+        .sort((first, second) =>
+          first.name.localeCompare(second.name, "ko"),
+        ),
+    [departmentOptions, selectedCollegeCode],
+  );
+
+  const filterResolution = useMemo(() => {
+    if (grades.length > 1) {
+      return {
+        issue: "현재 API는 학년 다중 선택을 지원하지 않습니다. 학년을 하나만 선택해주세요.",
+        params: {},
+      };
+    }
+
+    if (otherGrade) {
+      return {
+        issue: "현재 API에는 ‘기타 학년’에 대응하는 요청값이 없습니다.",
+        params: {},
+      };
+    }
+
+    if (majors.length > 1) {
+      return {
+        issue: "현재 API는 전공/영역 다중 선택을 지원하지 않습니다. 항목을 하나만 선택해주세요.",
+        params: {},
+      };
+    }
+
+    const params = {};
+
+    if (grades.length === 1) {
+      params.targetGrade = String(grades[0]);
+    }
+
+    if (majors.length === 1) {
+      const mappedFilter = MAJOR_API_FILTERS[majors[0]];
+
+      if (!mappedFilter) {
+        return {
+          issue: `‘${majors[0]}’은 대학 이름이지만 API는 학과 코드를 요구합니다. 학과 목록 API 연결이 필요합니다.`,
+          params: {},
+        };
+      }
+
+      Object.assign(params, mappedFilter);
+    }
+
+    if (selectedDepartment?.code) {
+      params.academicUnitCode = selectedDepartment.code;
+    }
+
+    return { issue: null, params };
+  }, [grades, majors, otherGrade, selectedDepartment]);
+
+  const sectionParams = useMemo(
+    () => ({
+      semesterId: activeTimetable?.semesterId ?? currentSemesterId,
+      query: debouncedQuery,
+      sort: SORT_API_VALUES[sort] ?? "NAME_ASC",
+      size: COURSE_PAGE_SIZE,
+      ...filterResolution.params,
+    }),
+    [
+      activeTimetable?.semesterId,
+      currentSemesterId,
+      debouncedQuery,
+      filterResolution.params,
+      sort,
+    ],
+  );
+
+  const {
+    courses,
+    error: courseError,
+    hasMore: hasMoreCourses,
+    loadMore: loadMoreCourses,
+    loading: coursesLoading,
+    loadingMore: coursesLoadingMore,
+    retry: retryCourses,
+  } = useSectionCourses(sectionParams, {
+    enabled:
+      authStep === "app" &&
+      currentTab === "timetable" &&
+      filterResolution.issue === null,
+  });
+
+  const activeCourse =
+    courses.find((course) => course.id === activeCourseId) ?? null;
+  const timeFilteredCourses = useMemo(
+    () =>
+      courses.filter((course) =>
+        courseMatchesTimeSelections(course, timeSelections),
+      ),
+    [courses, timeSelections],
+  );
+
+  useEffect(() => {
+    if (
+      timeSelections.length === 0 ||
+      coursesLoading ||
+      coursesLoadingMore ||
+      !hasMoreCourses ||
+      timeFilteredCourses.length >= 12
+    ) {
+      return;
+    }
+
+    loadMoreCourses();
+  }, [
+    courses.length,
+    coursesLoading,
+    coursesLoadingMore,
+    hasMoreCourses,
+    loadMoreCourses,
+    timeFilteredCourses.length,
+    timeSelections.length,
+  ]);
+
+  const addTimeSelection = (selection) => {
+    setTimeSelections((current) => {
+      const incomingCells = getTimeSelectionCells(selection);
+      const incomingKeys = new Set(
+        incomingCells.map((cell) => timeCellKey(cell.day, cell.slot)),
+      );
+      const overlappingSelections = current.filter((item) =>
+        item.cells.some((cell) =>
+          incomingKeys.has(timeCellKey(cell.day, cell.slot)),
+        ),
+      );
+
+      if (overlappingSelections.some((item) => item.locked)) {
+        return current;
+      }
+
+      if (overlappingSelections.length === 0) {
+        const id = nextTimeSelectionId.current;
+        nextTimeSelectionId.current += 1;
+        return [...current, { id, cells: incomingCells, locked: false }];
+      }
+
+      const mergedKeys = new Set(incomingKeys);
+      overlappingSelections.forEach((item) => {
+        item.cells.forEach((cell) => {
+          mergedKeys.add(timeCellKey(cell.day, cell.slot));
+        });
+      });
+
+      const overlappingIds = new Set(
+        overlappingSelections.map((item) => item.id),
+      );
+      const mergedCells = [...mergedKeys]
+        .map((key) => {
+          const [day, slot] = key.split(":").map(Number);
+          return { day, slot };
+        })
+        .sort((first, second) => first.day - second.day || first.slot - second.slot);
+      const retainedSelections = current.filter(
+        (item) => !overlappingIds.has(item.id),
+      );
+
+      return [
+        ...retainedSelections,
+        {
+          id: overlappingSelections[0].id,
+          cells: mergedCells,
+          locked: false,
+        },
+      ];
+    });
+  };
+
+  const removeTimeSelection = (selectionId) => {
+    setTimeSelections((current) =>
+      current.filter((selection) => selection.id !== selectionId),
+    );
+  };
+
+  const toggleTimeSelectionLock = (selectionId) => {
+    const targetSelection = timeSelections.find(
+      (selection) => selection.id === selectionId,
+    );
+
+    if (
+      targetSelection &&
+      !targetSelection.locked &&
+      selectedCourses
+        .filter((course) => course.locked)
+        .some((course) =>
+          courseOverlapsTimeSelections(course, [targetSelection]),
+        )
+    ) {
+      window.alert(
+        "고정된 강의와 겹치는 시간대는 비우는 시간으로 고정할 수 없습니다.",
+      );
+      return;
+    }
+
+    setTimeSelections((current) =>
+      current.map((selection) =>
+        selection.id === selectionId
+          ? { ...selection, locked: !selection.locked }
+          : selection,
+      ),
+    );
+  };
+
+  const addTimetable = async () => {
+    const timetableId = nextTimetableId.current;
+    nextTimetableId.current += 1;
+    const nextTimetable = {
+      id: timetableId,
+      name: `시간표 ${timetableId}`,
+      semesterId: currentSemesterId,
+      favorite: false,
+      courses: [],
+    };
+
+    setTimetables((current) => [
+      ...current,
+      nextTimetable,
+    ]);
+    setActiveTimetableId(timetableId);
+    setActiveCourseId(null);
+    setFocusedCourseId(null);
+    setTimeSelections([]);
+
+    try {
+      const saved = await createTimetable({
+        name: nextTimetable.name,
+        semesterId: nextTimetable.semesterId,
+        sections: [],
+      });
+      setTimetables((current) =>
+        current.map((item) =>
+          item.id === timetableId
+            ? {
+                ...item,
+                serverId: saved.id,
+                totalCredits: saved.totalCredits,
+              }
+            : item,
+        ),
+      );
+      setTimetableSyncError("");
+    } catch (error) {
+      setTimetableSyncError(
+        error.status === 401
+          ? "로그인 세션이 없어 새 시간표를 서버에 저장하지 못했습니다."
+          : error.message || "새 시간표를 서버에 저장하지 못했습니다.",
+      );
+    }
+  };
+
+  const selectTimetable = (timetableId) => {
+    setActiveTimetableId(timetableId);
+    setActiveCourseId(null);
+    setFocusedCourseId(null);
+    setTimeSelections([]);
+  };
+
+  const renameTimetable = async (timetableId, name) => {
+    const target = timetables.find((item) => item.id === timetableId);
+    setTimetables((current) =>
+      current.map((item) =>
+        item.id === timetableId ? { ...item, name } : item,
+      ),
+    );
+
+    try {
+      if (target?.serverId) {
+        await updateServerTimetable(target.serverId, name);
+      } else if (target) {
+        const saved = await createTimetable({
+          name,
+          semesterId: target.semesterId ?? currentSemesterId,
+          sections: toTimetableSectionRequests(target.courses),
+        });
+        setTimetables((current) =>
+          current.map((item) =>
+            item.id === timetableId
+              ? { ...item, serverId: saved.id }
+              : item,
+          ),
+        );
+      }
+      setTimetableSyncError("");
+    } catch (error) {
+      setTimetableSyncError(
+        error.status === 401
+          ? "로그인 세션이 없어 시간표 이름을 서버에 저장하지 못했습니다."
+          : error.message || "시간표 이름을 서버에 저장하지 못했습니다.",
+      );
+    }
+  };
+
+  const deleteTimetable = async (timetableId) => {
+    const target = timetables.find((item) => item.id === timetableId);
+    const filtered = timetables.filter((item) => item.id !== timetableId);
+    const remaining =
+      filtered.length > 0
+        ? filtered
+        : createInitialTimetables(currentSemesterId);
+    setTimetables(remaining);
+
+    if (activeTimetableId === timetableId) {
+      setActiveTimetableId(remaining[0]?.id ?? null);
+      setActiveCourseId(null);
+      setFocusedCourseId(null);
+    }
+
+    try {
+      if (target?.serverId) {
+        await deleteServerTimetable(target.serverId);
+      }
+      setTimetableSyncError("");
+    } catch (error) {
+      setTimetableSyncError(
+        error.status === 401
+          ? "로그인 세션이 없어 시간표를 서버에서 삭제하지 못했습니다."
+          : error.message || "시간표를 서버에서 삭제하지 못했습니다.",
+      );
+    }
+  };
+
+  const toggleTimetableFavorite = (timetableId) => {
+    setTimetables((current) =>
+      current.map((item) =>
+        item.id === timetableId
+          ? { ...item, favorite: !item.favorite }
+          : item,
+      ),
+    );
+  };
+
+  const commitCourse = async (course) => {
+    if (!activeTimetable) return;
+    const nextCourses = selectedCourses.some((item) => item.id === course.id)
+      ? selectedCourses
+      : [...selectedCourses, course];
+
+    setSelectedCourses(nextCourses);
+    setActiveCourseId(null);
+    setFocusedCourseId(null);
+
+    try {
+      await persistTimetableCourses(activeTimetable, nextCourses);
+    } catch (error) {
+      setTimetableSyncError(
+        error.status === 401
+          ? "로그인 세션이 없어 강의 추가 내용을 서버에 저장하지 못했습니다."
+          : error.message || "강의 추가 내용을 서버에 저장하지 못했습니다.",
+      );
+    }
+  };
+
+  const removeCourse = async (courseId) => {
+    if (!activeTimetable) return;
+    const nextCourses = selectedCourses.filter(
+      (course) => course.id !== courseId,
+    );
+
+    setSelectedCourses(nextCourses);
+    setActiveCourseId((current) => (current === courseId ? null : current));
+    setFocusedCourseId((current) => (current === courseId ? null : current));
+
+    try {
+      await persistTimetableCourses(activeTimetable, nextCourses);
+    } catch (error) {
+      setTimetableSyncError(
+        error.status === 401
+          ? "로그인 세션이 없어 강의 삭제 내용을 서버에 저장하지 못했습니다."
+          : error.message || "강의 삭제 내용을 서버에 저장하지 못했습니다.",
+      );
+    }
+  };
+
+  const toggleCourseLock = (courseId) => {
+    const targetCourse = selectedCourses.find(
+      (course) => String(course.id) === String(courseId),
+    );
+    const lockedTimeSelections = timeSelections.filter(
+      (selection) => selection.locked,
+    );
+
+    if (
+      targetCourse &&
+      !targetCourse.locked &&
+      courseOverlapsTimeSelections(targetCourse, lockedTimeSelections)
+    ) {
+      window.alert(
+        "비우기로 고정한 시간대와 겹치는 강의는 고정할 수 없습니다.",
+      );
+      return;
+    }
+
+    setSelectedCourses((current) =>
+      current.map((course) =>
+        String(course.id) === String(courseId)
+          ? { ...course, locked: !course.locked }
+          : course,
+      ),
+    );
+  };
+
+  const addCourse = (course) => {
+    if (selectedCourses.some((item) => item.id === course.id)) return;
+
+    const conflicts = getConflictingCourses(course, selectedCourses);
+
+    if (conflicts.length > 0) {
+      setCourseConflict({ course, conflicts });
+      return;
+    }
+
+    commitCourse(course);
+  };
+
+  const autoGenerate = async ({
+    days = [],
+    times = [],
+    liberals = [],
+    grades: preferredGrades = [],
+    minCredits = 12,
+    maxCredits = 22,
+  } = {}) => {
+    if (!activeTimetable || optimizationLoading) return;
+
+    optimizationAbortRef.current?.abort();
+    const controller = new AbortController();
+    optimizationAbortRef.current = controller;
+    const targetTimetableId = activeTimetable.id;
+    const lockedCourses = selectedCourses.filter((course) => course.locked);
+    const lockedTimeSelections = timeSelections.filter(
+      (selection) => selection.locked,
+    );
+    const invalidLockedCourse = lockedCourses.find(
+      (course) => !getSectionKey(course),
+    );
+
+    setOptimizationError(null);
+    setOptimizationLoading(true);
+
+    try {
+      if (invalidLockedCourse) {
+        throw new Error(
+          `‘${invalidLockedCourse.name}’ 강의에는 서버 과목·분반 코드가 없어 고정 강의로 전송할 수 없습니다. API 검색 결과에서 해당 강의를 다시 추가해주세요.`,
+        );
+      }
+
+      const candidateQueries =
+        liberals.length > 0
+          ? liberals.map((liberal) => MAJOR_API_FILTERS[liberal] ?? {})
+          : preferredGrades.length > 0
+            ? preferredGrades.map((grade) => ({
+                targetGrade: String(grade),
+              }))
+            : [{}];
+      const candidatePages = await Promise.all(
+        candidateQueries.map((candidateFilter) =>
+          getSections(
+            {
+              semesterId: activeTimetable.semesterId ?? currentSemesterId,
+              sort: "NAME_ASC",
+              page: 0,
+              size: OPTIMIZATION_CANDIDATE_LIMIT,
+              ...candidateFilter,
+            },
+            controller.signal,
+          ),
+        ),
+      );
+      const fetchedCourses = candidatePages.flatMap(
+        (result) => result.items ?? [],
+      );
+      const lockedCourseKeys = new Set(
+        lockedCourses.map(getSectionKey).filter(Boolean),
+      );
+      const matchesPreferredGrade = (course) =>
+        preferredGrades.length === 0 ||
+        preferredGrades.some((grade) =>
+          String(course.targetGrade ?? "").includes(String(grade)),
+        );
+      const matchesPreferredLiberal = (course) =>
+        liberals.length === 0 ||
+        liberals.some((liberal) => {
+          const apiCategory = MAJOR_API_FILTERS[liberal]?.category;
+          return (
+            course.category === apiCategory ||
+            course.category?.includes(liberal.replace(/\s/g, ""))
+          );
+        });
+      const candidatePool = mergeCoursesBySection(
+        lockedCourses,
+        selectedCourses,
+        fetchedCourses,
+        courses,
+      ).filter((course) => {
+        const key = getSectionKey(course);
+        if (!key) return false;
+        if (lockedCourseKeys.has(key)) return true;
+
+        return (
+          matchesPreferredGrade(course) &&
+          matchesPreferredLiberal(course) &&
+          !courseOverlapsTimeSelections(course, lockedTimeSelections)
+        );
+      });
+
+      if (lockedCourses.length > OPTIMIZATION_CANDIDATE_LIMIT) {
+        throw new Error("고정 강의는 최대 100개까지 자동편성에 포함할 수 있습니다.");
+      }
+
+      const orderedCandidates = [
+        ...lockedCourses,
+        ...candidatePool.filter(
+          (course) => !lockedCourseKeys.has(getSectionKey(course)),
+        ),
+      ].slice(0, OPTIMIZATION_CANDIDATE_LIMIT);
+
+      if (orderedCandidates.length === 0) {
+        throw new Error(
+          "자동편성에 사용할 수 있는 후보 강의가 없습니다. 조건을 줄이거나 강의 목록을 다시 불러와주세요.",
+        );
+      }
+
+      let serverTimetableId = activeTimetable.serverId;
+
+      if (!serverTimetableId) {
+        const serverTimetable = await createTimetable(
+          {
+            name: activeTimetable.name,
+            semesterId:
+              activeTimetable.semesterId ?? currentSemesterId,
+            sections: [],
+          },
+          controller.signal,
+        );
+        serverTimetableId = serverTimetable?.id;
+
+        if (!serverTimetableId) {
+          throw new Error("자동편성에 사용할 서버 시간표를 만들지 못했습니다.");
+        }
+
+        setTimetables((current) =>
+          current.map((item) =>
+            item.id === targetTimetableId
+              ? { ...item, serverId: serverTimetableId }
+              : item,
+          ),
+        );
+      }
+
+      const optimizationJob = await createOptimizationJob(
+        {
+          timetableId: serverTimetableId,
+          minCredits,
+          maxCredits,
+          targetCredits: Math.round((minCredits + maxCredits) / 2),
+          excludedDays: days.map((day) => DAY_API_VALUES[day]).filter(Boolean),
+          availableTime: getAvailableTime(times),
+          lunchTime: {
+            startTime: "12:00:00",
+            endTime: "13:00:00",
+          },
+          maxDailyClassMinutes: 600,
+          candidateCourses: orderedCandidates.map((course) => ({
+            courseCode: course.courseCode,
+            sectionCode: course.sectionCode,
+            required: lockedCourseKeys.has(getSectionKey(course)),
+          })),
+        },
+        controller.signal,
+      );
+
+      if (!optimizationJob?.id) {
+        throw new Error("자동편성 작업 ID를 받지 못했습니다.");
+      }
+
+      const completedJob =
+        optimizationJob.status === "SUCCESS"
+          ? optimizationJob
+          : await waitForOptimizationJob(optimizationJob.id, {
+              signal: controller.signal,
+            });
+
+      if (completedJob.status !== "SUCCESS") {
+        throw new Error(
+          completedJob.failureReason ||
+            "서버에서 자동편성 작업을 완료하지 못했습니다.",
+        );
+      }
+
+      const results = [...(completedJob.results ?? [])].sort(
+        (first, second) => (first.rank ?? 0) - (second.rank ?? 0),
+      );
+
+      if (results.length === 0 || !results[0]?.sections?.length) {
+        throw new Error("조건에 맞는 자동편성 결과가 없습니다.");
+      }
+
+      const generatedCourses = mapOptimizationSections(results[0].sections, {
+        sourceCourses: orderedCandidates,
+        lockedCourseKeys,
+      });
+      const generatedSections =
+        toTimetableSectionRequests(generatedCourses);
+
+      if (generatedSections.length === 0) {
+        throw new Error(
+          "자동편성 결과에서 저장할 수 있는 과목·분반 정보를 찾지 못했습니다.",
+        );
+      }
+
+      const savedTimetable = await replaceTimetableSections(
+        serverTimetableId,
+        generatedSections,
+        controller.signal,
+      );
+
+      setTimetables((current) =>
+        current.map((item) =>
+          item.id === targetTimetableId
+            ? {
+                ...item,
+                serverId: serverTimetableId,
+                semesterId:
+                  savedTimetable?.semesterId ?? item.semesterId,
+                courses: generatedCourses,
+              }
+            : item,
+        ),
+      );
+      setGeneratedScheduleCount(results.length);
+      setActiveCourseId(null);
+      setFocusedCourseId(null);
+      setShowComplete(true);
+    } catch (error) {
+      const message = getOptimizationErrorMessage(error);
+      if (message) setOptimizationError(message);
+    } finally {
+      if (optimizationAbortRef.current === controller) {
+        optimizationAbortRef.current = null;
+        setOptimizationLoading(false);
+      }
+    }
+  };
+
+  const handleCourseListScroll = (event) => {
+    if (focusedCourse) return;
+
+    const element = event.currentTarget;
+    const remaining =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+
+    if (remaining < 160 && hasMoreCourses) {
+      loadMoreCourses();
+    }
   };
 
   const toggleFilterGrade = (value) => {
@@ -1012,12 +3389,15 @@ export default function App() {
   };
 
   const addMajorFilter = (value) => {
+    setSelectedDepartment(null);
     setMajors((current) =>
       current.includes(value) ? current : [...current, value],
     );
   };
 
   const openFilter = (name, event) => {
+    setFocusedCourseId(null);
+
     if (window.innerWidth >= 1024) {
       const layout = event.currentTarget.closest(".timetable-layout");
       const layoutRect = layout?.getBoundingClientRect();
@@ -1158,10 +3538,25 @@ export default function App() {
     return (
       <SignupInfoPage
         onBack={() => setAuthStep("login")}
-        onComplete={(info) => {
-          setUser(info); // { name, studentId, major, grade }
+        onComplete={async (info) => {
+          setUser(info);
           setAuthStep("app");
-          setCurrentTab("timetable"); // 메인 화면(시간표 탭)으로
+          setCurrentTab("timetable");
+
+          try {
+            const saved = await updateCurrentUser({
+              name: info.name,
+              grade: info.grade,
+              departmentId: info.departmentCode,
+            });
+            setUser(mapUserProfile(saved, info));
+          } catch (error) {
+            if (error.status !== 401) {
+              setTimetableSyncError(
+                error.message || "사용자 정보를 서버에 저장하지 못했습니다.",
+              );
+            }
+          }
         }}
       />
     );
@@ -1170,6 +3565,7 @@ export default function App() {
   if (currentTab === "courses") {
     return (
       <MyCoursesPage
+        semesterId={currentSemesterId}
         onTimetable={() => setCurrentTab("timetable")}
         onMyPage={() => setCurrentTab("mypage")}
       />
@@ -1185,12 +3581,20 @@ export default function App() {
         onMyTimetableList={() => setCurrentTab("mytimetablelist")}
         onFavoriteTimetableList={() => setCurrentTab("myfavoritetimetablelist")}
         onAccountInfo={() => setCurrentTab("myaccountinfo")}
-        onWithdraw={() => {
-          // TODO: 백엔드 API 연결 후 실제 탈퇴 처리로 변경
-          alert("회원탈퇴가 완료되었습니다.");
-          setUser(null);           // 유저 정보 초기화
-          setAuthStep("login");    // 로그인 화면으로
-          setCurrentTab("timetable"); // authStep이 다시 "app"이 될 때를 대비해 기본값으로 리셋
+        onWithdraw={async () => {
+          try {
+            await withdrawCurrentUser();
+            alert("회원탈퇴가 완료되었습니다.");
+            setUser(null);
+            setAuthStep("login");
+            setCurrentTab("timetable");
+          } catch (error) {
+            alert(
+              error.status === 401
+                ? "로그인 세션이 없어 회원탈퇴를 처리하지 못했습니다."
+                : error.message || "회원탈퇴를 처리하지 못했습니다.",
+            );
+          }
         }}
       />
     );
@@ -1199,6 +3603,8 @@ export default function App() {
   if (currentTab === "mytimetablelist") {
     return (
       <MyTimetableList
+        timetables={timetables}
+        currentSemesterId={currentSemesterId}
         onBack={() => setCurrentTab("mypage")}
         onCourses={() => setCurrentTab("courses")}
         onTimetable={() => setCurrentTab("timetable")}
@@ -1215,6 +3621,7 @@ export default function App() {
   if (currentTab === "mytimetabledetail") {
     return (
       <MyTimetableDetail
+        timetables={timetables}
         timetableId={selectedTimetableId}
         onBack={() => setCurrentTab(timetableReturnTab)}
         onCourses={() => setCurrentTab("courses")}
@@ -1227,6 +3634,7 @@ export default function App() {
   if (currentTab === "myfavoritetimetablelist") {
     return (
       <MyFavoriteTimetableList
+        timetables={timetables}
         onBack={() => setCurrentTab("mypage")}
         onCourses={() => setCurrentTab("courses")}
         onTimetable={() => setCurrentTab("timetable")}
@@ -1244,9 +3652,13 @@ export default function App() {
     return (
       <MyAccountInfo
         user={user}
-        onSave={(updatedUser) => {
-          setUser(updatedUser);
-          setCurrentTab("mypage");
+        onSave={async (updatedUser) => {
+          const saved = await updateCurrentUser({
+            name: updatedUser.name,
+            grade: updatedUser.grade,
+            departmentId: updatedUser.departmentCode,
+          });
+          setUser(mapUserProfile(saved, updatedUser));
         }}
         onBack={() => setCurrentTab("mypage")}
         onCourses={() => setCurrentTab("courses")}
@@ -1262,24 +3674,58 @@ export default function App() {
         <header className="timetable-header px-[14px] pt-[10px]">
           <div className="flex items-end justify-between">
             <div>
-              <p className="text-[10px] text-[#a7a7a7]">2026-2학기</p>
+              <p className="text-[10px] text-[#a7a7a7]">
+                {activeTimetable?.semesterId ?? currentSemesterId}학기
+              </p>
               <button
                 onClick={() => setOverlay("timetables")}
                 className="flex items-center gap-1 text-[17px] font-extrabold"
               >
-                시간표 1 <ChevronDown size={13} strokeWidth={2.5} />
+                {activeTimetable?.name ?? "시간표 없음"}{" "}
+                <ChevronDown size={13} strokeWidth={2.5} />
               </button>
             </div>
-            <button onClick={() => setOverlay("auto")} className="flex items-center text-[13px] font-bold text-brand">
-          <WandSparkles size={17} /> 자동편성
+            <button
+              type="button"
+              disabled={optimizationLoading}
+              onClick={() => setOverlay("auto")}
+              className="flex items-center text-[13px] font-bold text-brand disabled:cursor-wait disabled:opacity-60"
+            >
+          <WandSparkles size={17} /> {optimizationLoading ? "편성 중" : "자동편성"}
             </button>
           </div>
           <Timetable
-            selectedIds={selectedIds}
-            activeCourseId={activeCourse}
+            selectedCourses={selectedCourses}
+            activeCourse={activeCourse}
+            focusedCourseId={focusedCourseId}
+            onCourseClick={(course) => {
+              setActiveCourseId(null);
+              setFocusedCourseId((current) =>
+                current === course.id ? null : course.id,
+              );
+            }}
+            onToggleCourseLock={toggleCourseLock}
+            timeSelections={timeSelections}
+            onAddTimeSelection={addTimeSelection}
+            onRemoveTimeSelection={removeTimeSelection}
+            onToggleTimeSelectionLock={toggleTimeSelectionLock}
+            onTimeSelectionStart={() => {
+              setActiveCourseId(null);
+              setFocusedCourseId(null);
+            }}
           />
           {overlay === "timetables" && (
-            <TimetableSheet onClose={() => setOverlay(null)} />
+            <TimetableSheet
+              items={timetables}
+              activeTimetableId={activeTimetableId}
+              onAdd={addTimetable}
+              onSelect={selectTimetable}
+              onRename={renameTimetable}
+              onDelete={deleteTimetable}
+              onToggleFavorite={toggleTimetableFavorite}
+              onDownload={downloadTimetableImage}
+              onClose={() => setOverlay(null)}
+            />
           )}
         </header>
 
@@ -1324,6 +3770,15 @@ export default function App() {
                 {value} <X size={10} />
               </button>
             ))}
+            {selectedDepartment && (
+              <button
+                type="button"
+                onClick={() => setSelectedDepartment(null)}
+                className="flex shrink-0 items-center gap-1 rounded-full border border-brand/20 bg-brand-soft px-2.5 py-1.5 text-[9px] text-brand"
+              >
+                {selectedDepartment.name} <X size={10} />
+              </button>
+            )}
             <button
               onClick={(event) => openFilter("grade", event)}
               className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-[9px] ${
@@ -1353,7 +3808,10 @@ export default function App() {
             <label className="flex min-w-[170px] flex-1 items-center rounded-full border border-[#e9e9e9] bg-[#f7f7f7] px-3">
               <input
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setFocusedCourseId(null);
+                  setQuery(event.target.value);
+                }}
                 placeholder="과목명, 교수명으로 검색"
                 className="w-full bg-transparent text-[9px] outline-none placeholder:text-[#999]"
               />
@@ -1362,21 +3820,105 @@ export default function App() {
           </div>
           </div>
 
-          <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto px-[14px] pb-2">
-            {courses.map((course) => (
+          <div
+            className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto px-[14px] pb-2"
+            onScroll={handleCourseListScroll}
+          >
+            {timetableSyncError && (
+              <div className="flex items-start justify-between gap-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-4 text-amber-800">
+                <span>{timetableSyncError}</span>
+                <button
+                  type="button"
+                  onClick={() => setTimetableSyncError("")}
+                  aria-label="동기화 알림 닫기"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+            {!focusedCourse && filterResolution.issue && (
+              <div className="rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-3 text-[11px] leading-4 text-amber-800">
+                {filterResolution.issue}
+              </div>
+            )}
+            {!focusedCourse &&
+              !filterResolution.issue &&
+              coursesLoading &&
+              courses.length === 0 && (
+              <div className="py-12 text-center text-[12px] text-[#999]">
+                강의 목록을 불러오는 중입니다.
+              </div>
+            )}
+            {!focusedCourse &&
+              !filterResolution.issue &&
+              courseError &&
+              courses.length === 0 && (
+              <div className="rounded-[12px] border border-red-100 bg-red-50 px-3 py-4 text-center">
+                <p className="text-[11px] leading-4 text-red-600">{courseError}</p>
+                <button
+                  type="button"
+                  onClick={retryCourses}
+                  className="mt-2 rounded-full border border-red-200 bg-white px-3 py-1 text-[10px] font-semibold text-red-600"
+                >
+                  다시 시도
+                </button>
+              </div>
+            )}
+            {focusedCourse ? (
               <CourseCard
-                key={course.id}
-                course={course}
-                active={activeCourse === course.id}
-                selected={false}
-                onClick={() =>
-                  setActiveCourse(activeCourse === course.id ? null : course.id)
-                }
-                onAdd={() => addCourse(course.id)}
+                course={focusedCourse}
+                active
+                selected
+                removable
+                onClick={() => {}}
+                onRemove={() => removeCourse(focusedCourse.id)}
               />
-            ))}
-            {courses.length === 0 && (
+            ) : (
+              !filterResolution.issue &&
+              timeFilteredCourses.map((course) => (
+                <CourseCard
+                  key={course.id}
+                  course={course}
+                  active={activeCourseId === course.id}
+                  selected={selectedCourses.some((item) => item.id === course.id)}
+                  onClick={() => {
+                    setFocusedCourseId(null);
+                    setActiveCourseId(
+                      activeCourseId === course.id ? null : course.id,
+                    );
+                  }}
+                  onAdd={() => addCourse(course)}
+                />
+              ))
+            )}
+            {!focusedCourse &&
+              !filterResolution.issue &&
+              !coursesLoading &&
+              !coursesLoadingMore &&
+              !hasMoreCourses &&
+              !courseError &&
+              timeFilteredCourses.length === 0 && (
               <div className="py-12 text-center text-[12px] text-[#999]">검색 결과가 없습니다.</div>
+            )}
+            {!focusedCourse &&
+              !filterResolution.issue &&
+              courseError &&
+              courses.length > 0 && (
+              <div className="py-3 text-center">
+                <p className="text-[10px] text-red-500">{courseError}</p>
+                <button
+                  type="button"
+                  onClick={retryCourses}
+                  className="mt-1 text-[10px] font-semibold text-brand"
+                >
+                  다시 시도
+                </button>
+              </div>
+            )}
+            {!focusedCourse && !filterResolution.issue && coursesLoadingMore && (
+              <div className="py-3 text-center text-[10px] text-[#999]">
+                다음 강의를 불러오는 중입니다.
+              </div>
             )}
           </div>
           </div>
@@ -1396,25 +3938,52 @@ export default function App() {
             anchor={filterAnchor}
             items={[
               "교양 및 교직과목",
-              "대순종대학",
-              "인문예술대학",
-              "글로벌산업통상대학",
-              "공공인재대학",
-              "보건과학대학",
-              "AI융합대학",
-              "공과대학",
-              "상생교양대학",
-              "미래평생교육융합대학",
-              "국제협력대학",
-              "융합전공",
+              ...collegeOptions.map((college) => college.name),
+              ...(departmentsLoading ? ["학과 목록 불러오는 중"] : []),
+              ...(departmentsError ? ["학과 목록을 불러오지 못함"] : []),
             ]}
             onSelect={(value) => {
               if (value === "교양 및 교직과목") {
                 setOverlay("major-type");
-              } else {
-                addMajorFilter(value);
-                setOverlay(null);
+                return;
               }
+
+              const college = collegeOptions.find(
+                (item) => item.name === value,
+              );
+              if (!college) return;
+
+              setSelectedCollegeCode(college.code);
+              setOverlay("major-department");
+            }}
+            onClose={() => setOverlay(null)}
+          />
+        )}
+        {overlay === "major-department" && (
+          <Popover
+            title={
+              collegeOptions.find(
+                (college) => college.code === selectedCollegeCode,
+              )?.name ?? "학과 선택"
+            }
+            top={236}
+            anchor={filterAnchor}
+            items={selectedCollegeDepartments.map(
+              (department) => department.name,
+            )}
+            selectedItems={
+              selectedDepartment ? [selectedDepartment.name] : []
+            }
+            onBack={() => setOverlay("major-root")}
+            onSelect={(value) => {
+              const department = selectedCollegeDepartments.find(
+                (item) => item.name === value,
+              );
+              if (!department) return;
+
+              setMajors([]);
+              setSelectedDepartment(department);
+              setOverlay(null);
             }}
             onClose={() => setOverlay(null)}
           />
@@ -1489,17 +4058,95 @@ export default function App() {
         {overlay === "auto" && (
           <AutoSchedulePanel
             onClose={() => setOverlay(null)}
-            onGenerate={() => {
+            onGenerate={(conditions) => {
               setOverlay(null);
-              autoGenerate();
+              autoGenerate(conditions);
             }}
           />
+        )}
+
+        {optimizationLoading && (
+          <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/20 px-8">
+            <section
+              aria-live="polite"
+              className="w-full max-w-[320px] rounded-[16px] bg-white px-6 py-7 text-center shadow-lg"
+            >
+              <span className="mx-auto block h-7 w-7 animate-spin rounded-full border-[3px] border-[#e7ddff] border-t-brand" />
+              <h2 className="mt-4 text-[14px] font-bold">시간표를 편성하고 있어요</h2>
+              <p className="mt-2 text-[11px] leading-4 text-[#888]">
+                서버에서 조건에 맞는 시간표를 계산하는 중입니다.
+              </p>
+            </section>
+          </div>
+        )}
+
+        {optimizationError && (
+          <div className="absolute inset-0 z-[65] flex items-center justify-center bg-black/30 px-8">
+            <section className="w-full max-w-[320px] rounded-[16px] bg-white px-5 pb-4 pt-5 text-center shadow-lg">
+              <h2 className="text-[14px] font-bold">자동편성을 완료하지 못했습니다</h2>
+              <p className="mt-2 break-keep text-[11px] leading-5 text-[#777]">
+                {optimizationError}
+              </p>
+              <button
+                type="button"
+                onClick={() => setOptimizationError(null)}
+                className="mt-5 h-[36px] w-full rounded-[10px] bg-brand text-[12px] font-semibold text-white"
+              >
+                확인
+              </button>
+            </section>
+          </div>
+        )}
+
+        {courseConflict && (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/30 px-8">
+            <section className="w-full max-w-[320px] rounded-[16px] bg-white px-5 pb-4 pt-5 text-center shadow-lg">
+              <h2 className="text-[14px] font-bold">
+                시간이 겹치는 강의가 있습니다
+              </h2>
+              <p className="mt-2 text-[11px] leading-4 text-[#777]">
+                <span className="font-semibold text-[#444]">
+                  {courseConflict.conflicts
+                    .map((course) => course.name)
+                    .join(", ")}
+                </span>
+                과(와) 시간이 겹칩니다.
+                <br />
+                그래도 시간표에 추가하시겠습니까?
+              </p>
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCourseConflict(null)}
+                  className="h-[36px] rounded-[10px] border border-[#ddd] text-[12px] text-[#777]"
+                >
+                  아니오
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    commitCourse(courseConflict.course);
+                    setCourseConflict(null);
+                  }}
+                  className="h-[36px] rounded-[10px] bg-brand text-[12px] font-semibold text-white"
+                >
+                  예
+                </button>
+              </div>
+            </section>
+          </div>
         )}
 
         {showComplete && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 px-[93px]">
             <section className="w-full max-w-[360px] rounded-[15px] bg-white px-4 pt-7 text-center shadow-lg">
-              <p className="pb-5 text-[12px]">시간표 3개가 생성되었습니다.</p>
+              <p className="pb-5 text-[12px]">
+                시간표 {generatedScheduleCount}개가 생성되었습니다.
+                <br />
+                <span className="mt-1 inline-block text-[10px] text-[#999]">
+                  가장 높은 점수의 시간표를 적용했습니다.
+                </span>
+              </p>
               <button
                 onClick={() => setShowComplete(false)}
                 className="w-full border-t border-[#eee] py-3 text-[10px] font-semibold text-brand"

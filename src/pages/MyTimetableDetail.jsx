@@ -1,14 +1,18 @@
 import { ArrowLeft } from "lucide-react";
 import BottomNavigation from "../components/BottomNavigation";
 import ReadOnlyTimetableGrid from "../components/ReadOnlyTimetableGrid";
-import { timetables } from "./MyTimeTableList";
 
-export default function MyTimetableDetail({ timetableId, onBack, onCourses, onTimetable, onMyPage }) {
+export default function MyTimetableDetail({
+  timetables,
+  timetableId,
+  onBack,
+  onCourses,
+  onTimetable,
+  onMyPage,
+}) {
   const timetable = timetables.find((item) => item.id === timetableId);
 
-  if (!timetable) {
-    return null;
-  }
+  if (!timetable) return null;
 
   return (
     <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
@@ -19,15 +23,16 @@ export default function MyTimetableDetail({ timetableId, onBack, onCourses, onTi
               <ArrowLeft size={16} className="text-black" />
             </button>
             <div>
-              <p className="text-[10px] text-[#a7a7a7]">{timetable.semester}</p>
-              <h1 className="text-[17px] font-bold">시간표</h1>
+              <p className="text-[10px] text-[#a7a7a7]">
+                {timetable.semesterId}학기
+              </p>
+              <h1 className="text-[17px] font-bold">{timetable.name}</h1>
             </div>
           </div>
 
           <div className="mx-auto w-full max-w-[560px]">
             <ReadOnlyTimetableGrid courses={timetable.courses} />
-         </div>
-
+          </div>
         </div>
 
         <BottomNavigation

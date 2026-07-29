@@ -990,7 +990,7 @@ function CourseCard({
   return (
     <article
       onClick={onClick}
-      className={`h-[76px] cursor-pointer overflow-hidden rounded-[14px] border px-[9px] py-[6px] transition ${
+      className={`flex h-[76px] cursor-pointer flex-col justify-center overflow-hidden rounded-[14px] border px-[9px] py-[6px] transition ${
         active
           ? "border-transparent bg-[#f7f4ff] shadow-[0_2px_3px_rgba(0,0,0,0.10)]"
           : "border-[#e1e1e1] bg-white"

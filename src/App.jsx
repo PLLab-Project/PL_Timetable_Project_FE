@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronUp,
   Circle,
+  CircleHelp,
   Download,
   GraduationCap,
   ImagePlus,
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import BottomNavigation from "./components/BottomNavigation";
+import FirstLoginTutorial from "./components/FirstLoginTutorial";
 import MyPage from "./pages/MyPage";
 import MyTimetableList from "./pages/MyTimeTableList";
 import MyTimetableDetail from "./pages/MyTimetableDetail";
@@ -65,6 +67,40 @@ const COLORS = ["#F0C92D", "#75C6A8", "#F09A86", "#78A7E8", "#B997E8"];
 const FALLBACK_SEMESTER_ID = "2026-2";
 const COURSE_PAGE_SIZE = 20;
 const OPTIMIZATION_CANDIDATE_LIMIT = 100;
+const TUTORIAL_STORAGE_PREFIX = "pl-timetable:tutorial-complete:v1";
+
+function tutorialStorageKey(profile) {
+  const identity =
+    profile?.studentId ??
+    profile?.studentNumber ??
+    profile?.id;
+
+  return identity
+    ? `${TUTORIAL_STORAGE_PREFIX}:${encodeURIComponent(String(identity))}`
+    : null;
+}
+
+function hasCompletedTutorial(profile) {
+  const storageKey = tutorialStorageKey(profile);
+  if (!storageKey) return false;
+
+  try {
+    return window.localStorage.getItem(storageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveTutorialCompletion(profile) {
+  const storageKey = tutorialStorageKey(profile);
+  if (!storageKey) return;
+
+  try {
+    window.localStorage.setItem(storageKey, "true");
+  } catch {
+    // 저장소를 사용할 수 없는 환경에서는 현재 세션에서만 닫습니다.
+  }
+}
 
 function mapUserProfile(profile, fallback = {}) {
   return {
@@ -2506,6 +2542,7 @@ export default function App() {
   const [optimizationLoading, setOptimizationLoading] = useState(false);
   const [optimizationError, setOptimizationError] = useState(null);
   const [timetableSyncError, setTimetableSyncError] = useState("");
+  const [showFirstLoginTutorial, setShowFirstLoginTutorial] = useState(false);
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const dragStartY = useRef(null);
   const dragStartX = useRef(null);
@@ -2612,7 +2649,11 @@ export default function App() {
 
     getCurrentUser(controller.signal)
       .then((profile) => {
-        setUser((current) => mapUserProfile(profile, current ?? {}));
+        const mappedProfile = mapUserProfile(profile, user ?? {});
+        setUser(mappedProfile);
+        if (!hasCompletedTutorial(mappedProfile)) {
+          setShowFirstLoginTutorial(true);
+        }
       })
       .catch((error) => {
         if (error.name === "AbortError" || error.status === 401) return;
@@ -3542,6 +3583,9 @@ export default function App() {
           setUser(info);
           setAuthStep("app");
           setCurrentTab("timetable");
+          if (!hasCompletedTutorial(info)) {
+            setShowFirstLoginTutorial(true);
+          }
 
           try {
             const saved = await updateCurrentUser({
@@ -3586,6 +3630,7 @@ export default function App() {
             await withdrawCurrentUser();
             alert("회원탈퇴가 완료되었습니다.");
             setUser(null);
+            setShowFirstLoginTutorial(false);
             setAuthStep("login");
             setCurrentTab("timetable");
           } catch (error) {
@@ -3685,14 +3730,26 @@ export default function App() {
                 <ChevronDown size={13} strokeWidth={2.5} />
               </button>
             </div>
-            <button
-              type="button"
-              disabled={optimizationLoading}
-              onClick={() => setOverlay("auto")}
-              className="flex items-center text-[13px] font-bold text-brand disabled:cursor-wait disabled:opacity-60"
-            >
-          <WandSparkles size={17} /> {optimizationLoading ? "편성 중" : "자동편성"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFirstLoginTutorial(true)}
+                aria-label="튜토리얼 다시 보기"
+                title="튜토리얼 다시 보기"
+                className="flex h-7 w-7 items-center justify-center rounded-full text-[#999] transition hover:bg-brand-soft hover:text-brand"
+              >
+                <CircleHelp size={18} />
+              </button>
+              <button
+                type="button"
+                disabled={optimizationLoading}
+                onClick={() => setOverlay("auto")}
+                className="flex items-center text-[13px] font-bold text-brand disabled:cursor-wait disabled:opacity-60"
+              >
+                <WandSparkles size={17} />{" "}
+                {optimizationLoading ? "편성 중" : "자동편성"}
+              </button>
+            </div>
           </div>
           <Timetable
             selectedCourses={selectedCourses}
@@ -4157,6 +4214,14 @@ export default function App() {
           </div>
         )}
       </div>
+      {showFirstLoginTutorial && (
+        <FirstLoginTutorial
+          onComplete={() => {
+            saveTutorialCompletion(user);
+            setShowFirstLoginTutorial(false);
+          }}
+        />
+      )}
     </main>
   );
 }

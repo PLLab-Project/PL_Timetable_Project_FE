@@ -5,16 +5,34 @@ export function getCurrentUser(signal) {
 }
 
 export function updateCurrentUser(
-  { name, grade, departmentId },
+  {
+    studentNumber,
+    name,
+    grade,
+    departmentId,
+    admissionYear,
+    studentType,
+    programPath,
+    tutorialCompleted,
+  },
   signal,
 ) {
-  return apiFetch("/api/v1/users/me", {
-    method: "PATCH",
-    body: JSON.stringify({
+  const body = Object.fromEntries(
+    Object.entries({
+      studentNumber,
       name,
       grade,
       departmentId,
-    }),
+      admissionYear,
+      studentType,
+      programPath,
+      tutorialCompleted,
+    }).filter(([, value]) => value !== undefined && value !== null),
+  );
+
+  return apiFetch("/api/v1/users/me", {
+    method: "PATCH",
+    body: JSON.stringify(body),
     signal,
   });
 }

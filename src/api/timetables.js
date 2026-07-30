@@ -129,7 +129,7 @@ export function mapTimetableResponse(timetable, sourceCourses = []) {
     name: timetable.name,
     semesterId: timetable.semesterId,
     totalCredits: timetable.totalCredits,
-    favorite: false,
+    favorite: Boolean(timetable.favorite),
     courses: (timetable.sections ?? []).map((section) =>
       mapTimetableCourse(section, sourceCourses),
     ),
@@ -178,6 +178,14 @@ export function updateTimetable(timetableId, name, signal) {
 export function deleteTimetable(timetableId, signal) {
   return apiFetch(`/api/v1/timetables/${timetableId}`, {
     method: "DELETE",
+    signal,
+  });
+}
+
+export function updateTimetableFavorite(timetableId, favorite, signal) {
+  return apiFetch(`/api/v1/timetables/${timetableId}/favorite`, {
+    method: "PATCH",
+    body: JSON.stringify({ favorite }),
     signal,
   });
 }

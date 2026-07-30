@@ -11,8 +11,10 @@ const DAY_INDEX = {
 const COURSE_COLORS = ["#E7C332", "#75C6A8", "#F09A86", "#78A7E8", "#B997E8"];
 
 function appendParam(searchParams, key, value) {
-  if (value === undefined || value === null || value === "") return;
-  searchParams.set(key, String(value));
+  const values = Array.isArray(value) ? value : [value];
+  values
+    .filter((item) => item !== undefined && item !== null && item !== "")
+    .forEach((item) => searchParams.append(key, String(item)));
 }
 
 function minutesFromTime(value) {
@@ -107,12 +109,14 @@ export async function getSections(
     query,
     category,
     academicUnitCode,
+    collegeCode,
     completionCategory,
     targetGrade,
+    preferredAcademicUnitCode,
     professor,
     credits,
     day,
-    sort = "NAME_ASC",
+    sort = "DEFAULT",
     page = 0,
     size = 20,
   },
@@ -123,8 +127,14 @@ export async function getSections(
   appendParam(searchParams, "query", query);
   appendParam(searchParams, "category", category);
   appendParam(searchParams, "academicUnitCode", academicUnitCode);
+  appendParam(searchParams, "collegeCode", collegeCode);
   appendParam(searchParams, "completionCategory", completionCategory);
   appendParam(searchParams, "targetGrade", targetGrade);
+  appendParam(
+    searchParams,
+    "preferredAcademicUnitCode",
+    preferredAcademicUnitCode,
+  );
   appendParam(searchParams, "professor", professor);
   appendParam(searchParams, "credits", credits);
   appendParam(searchParams, "day", day);
@@ -140,4 +150,27 @@ export async function getSections(
     ...data,
     items: (data?.items ?? []).map(mapSectionToCourse),
   };
+}
+
+export async function getAllSections(params, signal) {
+  const sections = [];
+  let page = 0;
+  let totalPages = 1;
+
+  while (page < totalPages) {
+    const result = await getSections(
+      {
+        ...params,
+        page,
+        size: 100,
+      },
+      signal,
+    );
+
+    sections.push(...(result?.items ?? []));
+    totalPages = Math.max(1, Number(result?.totalPages) || 1);
+    page += 1;
+  }
+
+  return sections;
 }

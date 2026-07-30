@@ -110,6 +110,16 @@ export function getOptimizationJob(jobId, signal) {
   return apiFetch(`/api/v1/optimizations/${jobId}`, { signal });
 }
 
+export function applyOptimizationResult(jobId, rank, signal) {
+  return apiFetch(
+    `/api/v1/optimizations/${jobId}/results/${rank}/apply`,
+    {
+      method: "POST",
+      signal,
+    },
+  );
+}
+
 function abortableDelay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(resolve, milliseconds);

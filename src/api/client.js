@@ -77,7 +77,10 @@ export async function apiFetch(path, init = {}) {
     headers.set("X-XSRF-TOKEN", csrfToken);
   }
 
-  if (init.body && !headers.has("Content-Type")) {
+  const isFormData =
+    typeof FormData !== "undefined" && init.body instanceof FormData;
+
+  if (init.body && !isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 

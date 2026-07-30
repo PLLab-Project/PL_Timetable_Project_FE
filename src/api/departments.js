@@ -1,5 +1,12 @@
 import { apiFetch } from "./client";
 
+function appendMultiParam(searchParams, key, value) {
+  const values = Array.isArray(value) ? value : [value];
+  values
+    .filter((item) => item !== undefined && item !== null && item !== "")
+    .forEach((item) => searchParams.append(key, String(item)));
+}
+
 export async function getDepartments(
   { query, collegeCode, currentOnly = true, page = 0, size = 20 } = {},
   signal,
@@ -7,7 +14,7 @@ export async function getDepartments(
   const searchParams = new URLSearchParams();
 
   if (query?.trim()) searchParams.set("query", query.trim());
-  if (collegeCode) searchParams.set("collegeCode", collegeCode);
+  appendMultiParam(searchParams, "collegeCode", collegeCode);
   searchParams.set("currentOnly", String(currentOnly));
   searchParams.set("page", String(page));
   searchParams.set("size", String(size));
@@ -42,4 +49,15 @@ export async function getAllDepartments(
   }
 
   return departments;
+}
+
+export function getColleges({ currentOnly = true } = {}, signal) {
+  const searchParams = new URLSearchParams({
+    currentOnly: String(currentOnly),
+  });
+
+  return apiFetch(
+    `/api/v1/departments/colleges?${searchParams.toString()}`,
+    { signal },
+  );
 }

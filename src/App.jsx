@@ -33,17 +33,21 @@ import {
   createCompletedCourse,
   deleteCompletedCourse,
   getCompletedCourses,
+  recognizeCompletedCourses,
   updateCompletedCourse,
 } from "./api/completedCourses";
 import { searchCourses } from "./api/courses";
-import { getAllDepartments } from "./api/departments";
+import {
+  getAllDepartments,
+  getColleges,
+} from "./api/departments";
 import { getGraduationEvaluation } from "./api/graduation";
 import {
+  applyOptimizationResult,
   createOptimizationJob,
-  mapOptimizationSections,
   waitForOptimizationJob,
 } from "./api/optimizations";
-import { getSections } from "./api/sections";
+import { getAllSections } from "./api/sections";
 import { findLatestSemester, getSemesters } from "./api/semesters";
 import {
   createTimetable,
@@ -52,6 +56,7 @@ import {
   getTimetables,
   mapTimetableResponse,
   replaceTimetableSections,
+  updateTimetableFavorite,
   updateTimetable as updateServerTimetable,
 } from "./api/timetables";
 import {
@@ -66,7 +71,6 @@ const TIMES = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
 const COLORS = ["#F0C92D", "#75C6A8", "#F09A86", "#78A7E8", "#B997E8"];
 const FALLBACK_SEMESTER_ID = "2026-2";
 const COURSE_PAGE_SIZE = 20;
-const OPTIMIZATION_CANDIDATE_LIMIT = 100;
 const TUTORIAL_STORAGE_PREFIX = "pl-timetable:tutorial-complete:v1";
 
 function tutorialStorageKey(profile) {
@@ -81,6 +85,8 @@ function tutorialStorageKey(profile) {
 }
 
 function hasCompletedTutorial(profile) {
+  if (profile?.tutorialCompleted === true) return true;
+
   const storageKey = tutorialStorageKey(profile);
   if (!storageKey) return false;
 
@@ -114,6 +120,20 @@ function mapUserProfile(profile, fallback = {}) {
     departmentCode:
       profile?.departmentId ?? fallback.departmentCode ?? "",
     collegeName: fallback.collegeName ?? "",
+    admissionYear:
+      profile?.admissionYear ?? fallback.admissionYear ?? null,
+    studentType:
+      profile?.studentType ?? fallback.studentType ?? "",
+    programPath:
+      profile?.programPath ?? fallback.programPath ?? "",
+    profileCompleted:
+      profile?.profileCompleted ?? fallback.profileCompleted ?? false,
+    graduationProfileCompleted:
+      profile?.graduationProfileCompleted ??
+      fallback.graduationProfileCompleted ??
+      false,
+    tutorialCompleted:
+      profile?.tutorialCompleted ?? fallback.tutorialCompleted ?? false,
   };
 }
 
@@ -132,8 +152,8 @@ const PREFERRED_TIME_RANGES = {
 };
 
 const SORT_API_VALUES = {
-  "": "NAME_ASC",
-  기본순: "NAME_ASC",
+  "": "DEFAULT",
+  기본순: "DEFAULT",
   인기순: "POPULARITY_DESC",
   이름순: "NAME_ASC",
 };
@@ -147,7 +167,7 @@ const MAJOR_API_FILTERS = {
   "과학과 기술": { category: "교양선택(제3영역:과학과기술)" },
   "예술과 문화": { category: "교양선택(제4영역:예술과문화)" },
   "융합과 혁신": { category: "교양선택(제5영역:융합과혁신)" },
-  디지털리터러시: { category: "교양선택(제6영역:디지털리터러시)" },
+  디지털리터러시: { category: "디지털리터러시" },
 };
 
 function getSectionKey(course) {
@@ -182,21 +202,18 @@ function toTimetableSectionRequests(courses) {
   return [...sectionsByKey.values()];
 }
 
-function getAvailableTime(preferredTimes) {
+function getAvailableTimes(preferredTimes) {
   if (!preferredTimes?.length) {
-    return { startTime: "09:00:00", endTime: "19:00:00" };
+    return [];
   }
 
-  const ranges = preferredTimes
+  return preferredTimes
     .map((time) => PREFERRED_TIME_RANGES[time])
-    .filter(Boolean);
-  const startHour = Math.min(...ranges.map(([start]) => start));
-  const endHour = Math.max(...ranges.map(([, end]) => end));
-
-  return {
-    startTime: `${String(startHour).padStart(2, "0")}:00:00`,
-    endTime: `${String(endHour).padStart(2, "0")}:00:00`,
-  };
+    .filter(Boolean)
+    .map(([startHour, endHour]) => ({
+      startTime: `${String(startHour).padStart(2, "0")}:00:00`,
+      endTime: `${String(endHour).padStart(2, "0")}:00:00`,
+    }));
 }
 
 function getOptimizationErrorMessage(error) {
@@ -390,6 +407,68 @@ function getTimeSelectionCells(selection) {
   }
 
   return cells;
+}
+
+function formatApiTime(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+    2,
+    "0",
+  )}:00`;
+}
+
+function getBlockedTimes(timeSelections) {
+  const cellsByDay = new Map();
+
+  timeSelections.forEach((selection) => {
+    selection.cells.forEach((cell) => {
+      const slots = cellsByDay.get(cell.day) ?? new Set();
+      slots.add(cell.slot);
+      cellsByDay.set(cell.day, slots);
+    });
+  });
+
+  const blockedTimes = [];
+
+  cellsByDay.forEach((slotSet, day) => {
+    const dayOfWeek = DAY_API_VALUES[DAYS[day]];
+    if (!dayOfWeek) return;
+
+    const slots = [...slotSet].sort((first, second) => first - second);
+    let rangeStart = null;
+    let previousSlot = null;
+
+    const pushRange = () => {
+      if (rangeStart === null || previousSlot === null) return;
+      blockedTimes.push({
+        dayOfWeek,
+        startTime: formatApiTime(9 * 60 + rangeStart * 30),
+        endTime: formatApiTime(9 * 60 + (previousSlot + 1) * 30),
+      });
+    };
+
+    slots.forEach((slot) => {
+      if (rangeStart === null) {
+        rangeStart = slot;
+        previousSlot = slot;
+        return;
+      }
+
+      if (slot === previousSlot + 1) {
+        previousSlot = slot;
+        return;
+      }
+
+      pushRange();
+      rangeStart = slot;
+      previousSlot = slot;
+    });
+
+    pushRange();
+  });
+
+  return blockedTimes;
 }
 
 function courseOverlapsTimeSelections(course, timeSelections) {
@@ -1519,14 +1598,6 @@ function AutoSchedulePanel({ onClose, onGenerate }) {
   );
 }
 
-const importedCourses = [
-  { id: 101, name: "운영체제론", area: "전공선택", credits: "3학점" },
-  { id: 102, name: "게임프로그래밍", area: "전공선택", credits: "3학점" },
-  { id: 103, name: "컴퓨터알고리즘", area: "전공선택", credits: "3학점" },
-  { id: 104, name: "사회복지조사론", area: "전공선택", credits: "3학점" },
-  { id: 105, name: "알면좋은한국사", area: "교양선택 · 5영역", credits: "2학점" },
-];
-
 const courseAreaOptions = [
   "전공필수",
   "전공선택",
@@ -1907,6 +1978,12 @@ function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
               name: name.trim(),
               area,
               credits,
+              gradingBasis: credits === "P/N" ? "PASS_FAIL" : "LETTER",
+              gradeValue: credits === "P/N" ? "P" : null,
+              actualCredits:
+                credits === "P/N"
+                  ? selectedCourse?.credits ?? initial?.actualCredits ?? 0
+                  : null,
               courseCode:
                 selectedCourse?.courseCode ?? initial?.courseCode ?? null,
               semesterId:
@@ -2237,29 +2314,32 @@ function GraduationModal({ semesterId, onClose }) {
 function mapCompletedCourse(course) {
   const credits = Number(course.credits);
   const creditLabel =
-    Number.isFinite(credits) && credits > 0
+    Number.isFinite(credits)
       ? `${Number.isInteger(credits) ? credits : String(credits)}학점`
-      : "P/N";
+      : "학점 미입력";
 
   return {
     id: course.id,
     name: course.courseName,
     area: course.area || course.category || "영역 미선택",
-    credits: creditLabel,
+    credits: course.gradingBasis === "PASS_FAIL" ? "P/N" : creditLabel,
+    actualCredits: Number.isFinite(credits) ? credits : 0,
     courseCode: course.courseCode,
     semesterId: course.semester,
     sourceCategory: course.category,
     status: course.status,
     inputSource: course.inputSource,
+    gradingBasis: course.gradingBasis || "LETTER",
+    gradeValue: course.gradeValue || "",
   };
 }
 
 function completedCourseRequest(values, fallbackSemesterId) {
   const isLiberalArea = courseLiberalAreaOptions.includes(values.area);
-  const numericCredits =
-    values.credits === "P/N"
-      ? 0
-      : Number.parseFloat(String(values.credits).replace("학점", ""));
+  const isPassFail = values.credits === "P/N";
+  const numericCredits = isPassFail
+    ? Number(values.actualCredits)
+    : Number.parseFloat(String(values.credits).replace("학점", ""));
 
   return {
     courseCode: values.courseCode || null,
@@ -2271,6 +2351,8 @@ function completedCourseRequest(values, fallbackSemesterId) {
     area: isLiberalArea ? values.area : null,
     semester: values.semesterId || fallbackSemesterId || null,
     status: "COMPLETED",
+    gradingBasis: isPassFail ? "PASS_FAIL" : "LETTER",
+    gradeValue: isPassFail ? values.gradeValue || "P" : "",
   };
 }
 
@@ -2283,6 +2365,8 @@ function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
   const [loading, setLoading] = useState(true);
   const [requestError, setRequestError] = useState("");
   const [savingDraftKey, setSavingDraftKey] = useState(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const ocrInputRef = useRef(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2382,6 +2466,42 @@ function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
     });
   };
 
+  const importCourseImage = async (file) => {
+    if (!file) return;
+
+    if (file.size > 7 * 1024 * 1024) {
+      setRequestError("이미지는 7MB 이하만 업로드할 수 있습니다.");
+      return;
+    }
+
+    setOcrLoading(true);
+    setRequestError("");
+
+    try {
+      await recognizeCompletedCourses(file);
+      setDrafts((current) =>
+        current.length > 0
+          ? current
+          : [
+              {
+                key: `ocr-${Date.now()}`,
+                editingId: null,
+                initial: null,
+              },
+            ],
+      );
+    } catch (error) {
+      setRequestError(
+        error.status === 401
+          ? "로그인 세션이 없어 이미지 OCR을 사용할 수 없습니다."
+          : error.message || "이미지에서 강의 정보를 읽지 못했습니다.",
+      );
+    } finally {
+      setOcrLoading(false);
+      if (ocrInputRef.current) ocrInputRef.current.value = "";
+    }
+  };
+
   return (
     <main className="app-shell mx-auto h-[min(874px,100dvh)] w-full max-w-[402px] overflow-hidden bg-white shadow-xl">
       <div className="my-courses-page relative h-full overflow-hidden">
@@ -2399,7 +2519,8 @@ function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
 
         <button
           type="button"
-          onClick={() => setCourses(importedCourses)}
+          onClick={() => ocrInputRef.current?.click()}
+          disabled={ocrLoading}
           className="mt-7 flex h-[53px] w-full flex-col items-center justify-center rounded-[14px] border border-brand text-brand"
         >
           <span className="flex items-center gap-1 text-[15px] font-semibold">
@@ -2407,6 +2528,13 @@ function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
           </span>
           <span className="mt-0.5 text-[10px] text-[#aaa]">에타 시간표로 편하게 입력하세요</span>
         </button>
+        <input
+          ref={ocrInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+          className="hidden"
+          onChange={(event) => importCourseImage(event.target.files?.[0])}
+        />
 
         <div className="my-8 flex items-center gap-6 text-[10px] text-[#aaa]">
           <span className="h-px flex-1 bg-[#ededed]" />
@@ -2526,8 +2654,9 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [majors, setMajors] = useState([]);
-  const [selectedDepartment, setSelectedDepartment] = useState(null);
+  const [selectedDepartments, setSelectedDepartments] = useState([]);
   const [selectedCollegeCode, setSelectedCollegeCode] = useState(null);
+  const [collegeOptions, setCollegeOptions] = useState([]);
   const [departmentOptions, setDepartmentOptions] = useState([]);
   const [departmentsLoading, setDepartmentsLoading] = useState(false);
   const [departmentsError, setDepartmentsError] = useState("");
@@ -2672,11 +2801,18 @@ export default function App() {
     setDepartmentsLoading(true);
     setDepartmentsError("");
 
-    getAllDepartments({ currentOnly: true }, controller.signal)
-      .then(setDepartmentOptions)
+    Promise.all([
+      getAllDepartments({ currentOnly: true }, controller.signal),
+      getColleges({ currentOnly: true }, controller.signal),
+    ])
+      .then(([departments, colleges]) => {
+        setDepartmentOptions(departments);
+        setCollegeOptions(colleges ?? []);
+      })
       .catch((error) => {
         if (error.name === "AbortError") return;
         setDepartmentOptions([]);
+        setCollegeOptions([]);
         setDepartmentsError(
           error.message || "학과 필터를 불러오지 못했습니다.",
         );
@@ -2713,12 +2849,9 @@ export default function App() {
         setTimetables((current) =>
           details.map((detail) => {
             const timetable = mapTimetableResponse(detail);
-            const previous = current.find(
-              (item) => item.serverId === timetable.serverId,
-            );
             return {
               ...timetable,
-              favorite: previous?.favorite ?? false,
+              favorite: Boolean(timetable.favorite),
             };
           }),
         );
@@ -2743,19 +2876,6 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  const collegeOptions = useMemo(() => {
-    const colleges = new Map();
-
-    departmentOptions.forEach((department) => {
-      if (!department.collegeCode || !department.collegeName) return;
-      if (!colleges.has(department.collegeCode)) {
-        colleges.set(department.collegeCode, department.collegeName);
-      }
-    });
-
-    return [...colleges].map(([code, name]) => ({ code, name }));
-  }, [departmentOptions]);
-
   const selectedCollegeDepartments = useMemo(
     () =>
       departmentOptions
@@ -2769,13 +2889,6 @@ export default function App() {
   );
 
   const filterResolution = useMemo(() => {
-    if (grades.length > 1) {
-      return {
-        issue: "현재 API는 학년 다중 선택을 지원하지 않습니다. 학년을 하나만 선택해주세요.",
-        params: {},
-      };
-    }
-
     if (otherGrade) {
       return {
         issue: "현재 API에는 ‘기타 학년’에 대응하는 요청값이 없습니다.",
@@ -2783,44 +2896,46 @@ export default function App() {
       };
     }
 
-    if (majors.length > 1) {
-      return {
-        issue: "현재 API는 전공/영역 다중 선택을 지원하지 않습니다. 항목을 하나만 선택해주세요.",
-        params: {},
-      };
-    }
-
     const params = {};
+    const selectedGrades = grades.map(String);
+    const categories = [];
+    const completionCategories = [];
 
-    if (grades.length === 1) {
-      params.targetGrade = String(grades[0]);
+    if (selectedGrades.length > 0) {
+      params.targetGrade = selectedGrades;
     }
 
-    if (majors.length === 1) {
-      const mappedFilter = MAJOR_API_FILTERS[majors[0]];
-
-      if (!mappedFilter) {
-        return {
-          issue: `‘${majors[0]}’은 대학 이름이지만 API는 학과 코드를 요구합니다. 학과 목록 API 연결이 필요합니다.`,
-          params: {},
-        };
+    majors.forEach((major) => {
+      const mappedFilter = MAJOR_API_FILTERS[major];
+      if (mappedFilter?.category) categories.push(mappedFilter.category);
+      if (mappedFilter?.completionCategory) {
+        completionCategories.push(mappedFilter.completionCategory);
       }
+    });
 
-      Object.assign(params, mappedFilter);
+    if (categories.length > 0) params.category = categories;
+    if (completionCategories.length > 0) {
+      params.completionCategory = completionCategories;
     }
-
-    if (selectedDepartment?.code) {
-      params.academicUnitCode = selectedDepartment.code;
+    if (selectedDepartments.length > 0) {
+      params.academicUnitCode = selectedDepartments.map(
+        (department) => department.code,
+      );
     }
-
     return { issue: null, params };
-  }, [grades, majors, otherGrade, selectedDepartment]);
+  }, [
+    grades,
+    majors,
+    otherGrade,
+    selectedDepartments,
+  ]);
 
   const sectionParams = useMemo(
     () => ({
       semesterId: activeTimetable?.semesterId ?? currentSemesterId,
       query: debouncedQuery,
-      sort: SORT_API_VALUES[sort] ?? "NAME_ASC",
+      preferredAcademicUnitCode: user?.departmentCode || undefined,
+      sort: SORT_API_VALUES[sort] ?? "DEFAULT",
       size: COURSE_PAGE_SIZE,
       ...filterResolution.params,
     }),
@@ -2830,6 +2945,7 @@ export default function App() {
       debouncedQuery,
       filterResolution.params,
       sort,
+      user?.departmentCode,
     ],
   );
 
@@ -3086,14 +3202,61 @@ export default function App() {
     }
   };
 
-  const toggleTimetableFavorite = (timetableId) => {
+  const toggleTimetableFavorite = async (timetableId) => {
+    const target = timetables.find((item) => item.id === timetableId);
+    if (!target) return;
+
+    const nextFavorite = !target.favorite;
     setTimetables((current) =>
       current.map((item) =>
         item.id === timetableId
-          ? { ...item, favorite: !item.favorite }
+          ? { ...item, favorite: nextFavorite }
           : item,
       ),
     );
+
+    try {
+      let serverTimetableId = target.serverId;
+
+      if (!serverTimetableId) {
+        const saved = await createTimetable({
+          name: target.name,
+          semesterId: target.semesterId ?? currentSemesterId,
+          sections: toTimetableSectionRequests(target.courses),
+        });
+        serverTimetableId = saved.id;
+      }
+
+      const saved = await updateTimetableFavorite(
+        serverTimetableId,
+        nextFavorite,
+      );
+      setTimetables((current) =>
+        current.map((item) =>
+          item.id === timetableId
+            ? {
+                ...item,
+                serverId: serverTimetableId,
+                favorite: Boolean(saved?.favorite ?? nextFavorite),
+              }
+            : item,
+        ),
+      );
+      setTimetableSyncError("");
+    } catch (error) {
+      setTimetables((current) =>
+        current.map((item) =>
+          item.id === timetableId
+            ? { ...item, favorite: target.favorite }
+            : item,
+        ),
+      );
+      setTimetableSyncError(
+        error.status === 401
+          ? "로그인 세션이 없어 즐겨찾기를 서버에 저장하지 못했습니다."
+          : error.message || "즐겨찾기를 서버에 저장하지 못했습니다.",
+      );
+    }
   };
 
   const commitCourse = async (course) => {
@@ -3211,81 +3374,39 @@ export default function App() {
         );
       }
 
-      const candidateQueries =
-        liberals.length > 0
-          ? liberals.map((liberal) => MAJOR_API_FILTERS[liberal] ?? {})
-          : preferredGrades.length > 0
-            ? preferredGrades.map((grade) => ({
-                targetGrade: String(grade),
-              }))
-            : [{}];
-      const candidatePages = await Promise.all(
-        candidateQueries.map((candidateFilter) =>
-          getSections(
-            {
-              semesterId: activeTimetable.semesterId ?? currentSemesterId,
-              sort: "NAME_ASC",
-              page: 0,
-              size: OPTIMIZATION_CANDIDATE_LIMIT,
-              ...candidateFilter,
-            },
-            controller.signal,
-          ),
-        ),
-      );
-      const fetchedCourses = candidatePages.flatMap(
-        (result) => result.items ?? [],
-      );
       const lockedCourseKeys = new Set(
         lockedCourses.map(getSectionKey).filter(Boolean),
       );
-      const matchesPreferredGrade = (course) =>
-        preferredGrades.length === 0 ||
-        preferredGrades.some((grade) =>
-          String(course.targetGrade ?? "").includes(String(grade)),
+      const categoryFilters = liberals
+        .map((liberal) => MAJOR_API_FILTERS[liberal]?.category)
+        .filter(Boolean);
+      const hasCandidateFilters =
+        categoryFilters.length > 0 || preferredGrades.length > 0;
+      const filteredCandidates = hasCandidateFilters
+        ? await getAllSections(
+            {
+              semesterId:
+                activeTimetable.semesterId ?? currentSemesterId,
+              category: categoryFilters,
+              targetGrade: preferredGrades.map(String),
+              sort: "DEFAULT",
+            },
+            controller.signal,
+          )
+        : [];
+
+      if (hasCandidateFilters && filteredCandidates.length === 0) {
+        throw new Error(
+          "선택한 학년·교양 조건에 맞는 후보 강의가 없습니다. 조건을 줄여서 다시 시도해주세요.",
         );
-      const matchesPreferredLiberal = (course) =>
-        liberals.length === 0 ||
-        liberals.some((liberal) => {
-          const apiCategory = MAJOR_API_FILTERS[liberal]?.category;
-          return (
-            course.category === apiCategory ||
-            course.category?.includes(liberal.replace(/\s/g, ""))
-          );
-        });
-      const candidatePool = mergeCoursesBySection(
+      }
+
+      const sourceCourses = mergeCoursesBySection(
         lockedCourses,
         selectedCourses,
-        fetchedCourses,
+        filteredCandidates,
         courses,
-      ).filter((course) => {
-        const key = getSectionKey(course);
-        if (!key) return false;
-        if (lockedCourseKeys.has(key)) return true;
-
-        return (
-          matchesPreferredGrade(course) &&
-          matchesPreferredLiberal(course) &&
-          !courseOverlapsTimeSelections(course, lockedTimeSelections)
-        );
-      });
-
-      if (lockedCourses.length > OPTIMIZATION_CANDIDATE_LIMIT) {
-        throw new Error("고정 강의는 최대 100개까지 자동편성에 포함할 수 있습니다.");
-      }
-
-      const orderedCandidates = [
-        ...lockedCourses,
-        ...candidatePool.filter(
-          (course) => !lockedCourseKeys.has(getSectionKey(course)),
-        ),
-      ].slice(0, OPTIMIZATION_CANDIDATE_LIMIT);
-
-      if (orderedCandidates.length === 0) {
-        throw new Error(
-          "자동편성에 사용할 수 있는 후보 강의가 없습니다. 조건을 줄이거나 강의 목록을 다시 불러와주세요.",
-        );
-      }
+      );
 
       let serverTimetableId = activeTimetable.serverId;
 
@@ -3321,16 +3442,22 @@ export default function App() {
           maxCredits,
           targetCredits: Math.round((minCredits + maxCredits) / 2),
           excludedDays: days.map((day) => DAY_API_VALUES[day]).filter(Boolean),
-          availableTime: getAvailableTime(times),
+          availableTimes: getAvailableTimes(times),
+          blockedTimes: getBlockedTimes(lockedTimeSelections),
           lunchTime: {
             startTime: "12:00:00",
             endTime: "13:00:00",
           },
           maxDailyClassMinutes: 600,
-          candidateCourses: orderedCandidates.map((course) => ({
+          candidateCourses: filteredCandidates.map((course) => ({
             courseCode: course.courseCode,
             sectionCode: course.sectionCode,
-            required: lockedCourseKeys.has(getSectionKey(course)),
+            required: false,
+          })),
+          requiredCourses: lockedCourses.map((course) => ({
+            courseCode: course.courseCode,
+            sectionCode: course.sectionCode,
+            required: true,
           })),
         },
         controller.signal,
@@ -3362,24 +3489,20 @@ export default function App() {
         throw new Error("조건에 맞는 자동편성 결과가 없습니다.");
       }
 
-      const generatedCourses = mapOptimizationSections(results[0].sections, {
-        sourceCourses: orderedCandidates,
-        lockedCourseKeys,
-      });
-      const generatedSections =
-        toTimetableSectionRequests(generatedCourses);
-
-      if (generatedSections.length === 0) {
-        throw new Error(
-          "자동편성 결과에서 저장할 수 있는 과목·분반 정보를 찾지 못했습니다.",
-        );
-      }
-
-      const savedTimetable = await replaceTimetableSections(
-        serverTimetableId,
-        generatedSections,
+      const appliedRank = results[0].rank ?? 1;
+      const savedTimetable = await applyOptimizationResult(
+        optimizationJob.id,
+        appliedRank,
         controller.signal,
       );
+      const mappedTimetable = mapTimetableResponse(
+        savedTimetable,
+        sourceCourses,
+      );
+      const generatedCourses = mappedTimetable.courses.map((course) => ({
+        ...course,
+        locked: lockedCourseKeys.has(getSectionKey(course)),
+      }));
 
       setTimetables((current) =>
         current.map((item) =>
@@ -3389,6 +3512,10 @@ export default function App() {
                 serverId: serverTimetableId,
                 semesterId:
                   savedTimetable?.semesterId ?? item.semesterId,
+                totalCredits:
+                  savedTimetable?.totalCredits ?? item.totalCredits,
+                favorite:
+                  savedTimetable?.favorite ?? item.favorite,
                 courses: generatedCourses,
               }
             : item,
@@ -3430,9 +3557,10 @@ export default function App() {
   };
 
   const addMajorFilter = (value) => {
-    setSelectedDepartment(null);
     setMajors((current) =>
-      current.includes(value) ? current : [...current, value],
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value],
     );
   };
 
@@ -3589,9 +3717,12 @@ export default function App() {
 
           try {
             const saved = await updateCurrentUser({
+              studentNumber: info.studentId,
               name: info.name,
               grade: info.grade,
               departmentId: info.departmentCode,
+              admissionYear:
+                Number(String(info.studentId ?? "").slice(0, 4)) || undefined,
             });
             setUser(mapUserProfile(saved, info));
           } catch (error) {
@@ -3699,9 +3830,13 @@ export default function App() {
         user={user}
         onSave={async (updatedUser) => {
           const saved = await updateCurrentUser({
+            studentNumber: updatedUser.studentId,
             name: updatedUser.name,
             grade: updatedUser.grade,
             departmentId: updatedUser.departmentCode,
+            admissionYear:
+              Number(String(updatedUser.studentId ?? "").slice(0, 4)) ||
+              undefined,
           });
           setUser(mapUserProfile(saved, updatedUser));
         }}
@@ -3733,21 +3868,21 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setShowFirstLoginTutorial(true)}
-                aria-label="튜토리얼 다시 보기"
-                title="튜토리얼 다시 보기"
-                className="flex h-7 w-7 items-center justify-center rounded-full text-[#999] transition hover:bg-brand-soft hover:text-brand"
-              >
-                <CircleHelp size={18} />
-              </button>
-              <button
-                type="button"
                 disabled={optimizationLoading}
                 onClick={() => setOverlay("auto")}
                 className="flex items-center text-[13px] font-bold text-brand disabled:cursor-wait disabled:opacity-60"
               >
                 <WandSparkles size={17} />{" "}
                 {optimizationLoading ? "편성 중" : "자동편성"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowFirstLoginTutorial(true)}
+                aria-label="튜토리얼 다시 보기"
+                title="튜토리얼 다시 보기"
+                className="flex h-7 w-7 items-center justify-center rounded-full text-[#999] transition hover:bg-brand-soft hover:text-brand"
+              >
+                <CircleHelp size={18} />
               </button>
             </div>
           </div>
@@ -3827,15 +3962,20 @@ export default function App() {
                 {value} <X size={10} />
               </button>
             ))}
-            {selectedDepartment && (
+            {selectedDepartments.map((department) => (
               <button
                 type="button"
-                onClick={() => setSelectedDepartment(null)}
+                key={department.code}
+                onClick={() =>
+                  setSelectedDepartments((current) =>
+                    current.filter((item) => item.code !== department.code),
+                  )
+                }
                 className="flex shrink-0 items-center gap-1 rounded-full border border-brand/20 bg-brand-soft px-2.5 py-1.5 text-[9px] text-brand"
               >
-                {selectedDepartment.name} <X size={10} />
+                {department.name} <X size={10} />
               </button>
-            )}
+            ))}
             <button
               onClick={(event) => openFilter("grade", event)}
               className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-[9px] ${
@@ -4028,9 +4168,9 @@ export default function App() {
             items={selectedCollegeDepartments.map(
               (department) => department.name,
             )}
-            selectedItems={
-              selectedDepartment ? [selectedDepartment.name] : []
-            }
+            selectedItems={selectedDepartments.map(
+              (department) => department.name,
+            )}
             onBack={() => setOverlay("major-root")}
             onSelect={(value) => {
               const department = selectedCollegeDepartments.find(
@@ -4038,9 +4178,11 @@ export default function App() {
               );
               if (!department) return;
 
-              setMajors([]);
-              setSelectedDepartment(department);
-              setOverlay(null);
+              setSelectedDepartments((current) =>
+                current.some((item) => item.code === department.code)
+                  ? current.filter((item) => item.code !== department.code)
+                  : [...current, department],
+              );
             }}
             onClose={() => setOverlay(null)}
           />
@@ -4051,13 +4193,15 @@ export default function App() {
             top={355}
             anchor={filterAnchor}
             items={["교양필수", "교양선택", "교직", "일반선택"]}
+            selectedItems={majors.filter((value) =>
+              ["교양필수", "교직", "일반선택"].includes(value),
+            )}
             onBack={() => setOverlay("major-root")}
             onSelect={(value) => {
               if (value === "교양선택") {
                 setOverlay("major-liberal");
               } else {
                 addMajorFilter(value);
-                setOverlay(null);
               }
             }}
             onClose={() => setOverlay(null)}
@@ -4073,7 +4217,6 @@ export default function App() {
             onBack={() => setOverlay("major-type")}
             onSelect={(value) => {
               addMajorFilter(value);
-              setOverlay(null);
             }}
             onClose={() => setOverlay(null)}
           />
@@ -4216,9 +4359,25 @@ export default function App() {
       </div>
       {showFirstLoginTutorial && (
         <FirstLoginTutorial
-          onComplete={() => {
+          onComplete={async () => {
             saveTutorialCompletion(user);
+            setUser((current) =>
+              current
+                ? { ...current, tutorialCompleted: true }
+                : current,
+            );
             setShowFirstLoginTutorial(false);
+
+            try {
+              await updateCurrentUser({ tutorialCompleted: true });
+            } catch (error) {
+              if (error.status !== 401) {
+                setTimetableSyncError(
+                  error.message ||
+                    "튜토리얼 완료 상태를 서버에 저장하지 못했습니다.",
+                );
+              }
+            }
           }}
         />
       )}

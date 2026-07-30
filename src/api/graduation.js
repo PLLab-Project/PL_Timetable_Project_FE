@@ -12,7 +12,7 @@ export async function getGraduationEvaluation(
 
   const query = searchParams.toString();
   return apiFetch(
-    `/api/v1/graduation/evaluation${query ? `?${query}` : ""}`,
+    `/api/v1/graduation/me/evaluation${query ? `?${query}` : ""}`,
     { signal },
   );
 }

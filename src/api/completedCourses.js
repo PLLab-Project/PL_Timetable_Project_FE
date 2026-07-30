@@ -26,3 +26,14 @@ export function deleteCompletedCourse(completedCourseId, signal) {
     signal,
   });
 }
+
+export function recognizeCompletedCourses(file, signal) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return apiFetch("/api/v1/completed-courses/ocr", {
+    method: "POST",
+    body: formData,
+    signal,
+  });
+}

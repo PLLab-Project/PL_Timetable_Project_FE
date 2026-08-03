@@ -4205,6 +4205,7 @@ export default function App() {
             name: info.name,
             grade: info.grade,
             departmentId: info.departmentCode,
+            programPath: info.programPath,
             admissionYear:
               Number(String(info.studentId ?? "").slice(0, 4)) || undefined,
           });

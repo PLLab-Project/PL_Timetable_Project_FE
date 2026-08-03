@@ -1,0 +1,20 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://pl-timetable-api-532874992461.asia-northeast3.run.app/api/:path*"
+    },
+    {
+      "source": "/oauth2/:path*",
+      "destination": "https://pl-timetable-api-532874992461.asia-northeast3.run.app/oauth2/:path*"
+    },
+    {
+      "source": "/login/oauth2/:path*",
+      "destination": "https://pl-timetable-api-532874992461.asia-northeast3.run.app/login/oauth2/:path*"
+    },
+    {
+      "source": "/:path*",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -3,6 +3,12 @@ import { ArrowLeft } from "lucide-react";
 import BottomNavigation from "../components/BottomNavigation";
 import { getDepartments } from "../api/departments";
 
+const PROGRAM_PATH_OPTIONS = [
+  { value: "ADVANCED_MAJOR", label: "단일전공" },
+  { value: "DOUBLE_MAJOR", label: "복수전공" },
+  { value: "MINOR", label: "부전공" },
+];
+
 export default function MyAccountInfo({
   user,
   onSave,
@@ -11,6 +17,11 @@ export default function MyAccountInfo({
   onTimetable,
   onMyPage,
 }) {
+  const initialProgramPath = ["DOUBLE_MAJOR", "MINOR"].includes(
+    user.programPath,
+  )
+    ? user.programPath
+    : "ADVANCED_MAJOR";
   const [majorQuery, setMajorQuery] = useState(user.major ?? "");
   const [department, setDepartment] = useState(
     user.departmentCode
@@ -24,11 +35,30 @@ export default function MyAccountInfo({
   const [departments, setDepartments] = useState([]);
   const [departmentsLoading, setDepartmentsLoading] = useState(false);
   const [showDepartments, setShowDepartments] = useState(false);
+  const [programPath, setProgramPath] = useState(initialProgramPath);
+  const [secondaryMajorQuery, setSecondaryMajorQuery] = useState(
+    user.secondaryMajor ?? "",
+  );
+  const [secondaryDepartment, setSecondaryDepartment] = useState(
+    user.secondaryDepartmentCode
+      ? {
+          code: user.secondaryDepartmentCode,
+          name: user.secondaryMajor,
+          collegeName: user.secondaryCollegeName,
+        }
+      : null,
+  );
+  const [secondaryDepartments, setSecondaryDepartments] = useState([]);
+  const [secondaryDepartmentsLoading, setSecondaryDepartmentsLoading] =
+    useState(false);
+  const [showSecondaryDepartments, setShowSecondaryDepartments] =
+    useState(false);
   const [grade, setGrade] = useState(`${user.grade}학년`);
   const [name, setName] = useState(user.name ?? "");
   const [showSavedModal, setShowSavedModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const needsSecondaryMajor = programPath !== "ADVANCED_MAJOR";
 
   useEffect(() => {
     const query = majorQuery.trim();
@@ -61,9 +91,67 @@ export default function MyAccountInfo({
     };
   }, [department, majorQuery, showDepartments]);
 
+  useEffect(() => {
+    const query = secondaryMajorQuery.trim();
+
+    if (
+      !needsSecondaryMajor ||
+      !showSecondaryDepartments ||
+      !query ||
+      secondaryDepartment?.name === query
+    ) {
+      setSecondaryDepartments([]);
+      setSecondaryDepartmentsLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSecondaryDepartmentsLoading(true);
+      getDepartments(
+        { query, currentOnly: true, page: 0, size: 20 },
+        controller.signal,
+      )
+        .then((result) => {
+          setSecondaryDepartments(
+            (result?.items ?? []).filter(
+              (item) => item.code !== department?.code,
+            ),
+          );
+        })
+        .catch((error) => {
+          if (error.name !== "AbortError") setSecondaryDepartments([]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setSecondaryDepartmentsLoading(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    department?.code,
+    needsSecondaryMajor,
+    secondaryDepartment,
+    secondaryMajorQuery,
+    showSecondaryDepartments,
+  ]);
+
   const handleSave = async () => {
-    if (!department?.code || !name.trim()) {
-      setSaveError("이름과 학과를 확인해주세요.");
+    if (
+      !department?.code ||
+      !name.trim() ||
+      (needsSecondaryMajor && !secondaryDepartment?.code)
+    ) {
+      setSaveError(
+        needsSecondaryMajor
+          ? "이름과 주전공, 추가 전공을 확인해주세요."
+          : "이름과 학과를 확인해주세요.",
+      );
       return;
     }
 
@@ -77,6 +165,10 @@ export default function MyAccountInfo({
         major: department.name,
         departmentCode: department.code,
         collegeName: department.collegeName,
+        programPath,
+        secondaryMajor: secondaryDepartment?.name ?? "",
+        secondaryDepartmentCode: secondaryDepartment?.code ?? "",
+        secondaryCollegeName: secondaryDepartment?.collegeName ?? "",
         grade: parseInt(grade, 10) || user.grade,
       });
       setShowSavedModal(true);
@@ -109,7 +201,39 @@ export default function MyAccountInfo({
 
           <div className="mt-8 space-y-5">
             <div>
-              <label className="mb-1 block text-sm text-gray-500">학과</label>
+              <label className="mb-2 block text-sm text-gray-500">
+                복수전공·부전공 여부
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {PROGRAM_PATH_OPTIONS.map((option) => (
+                  <button
+                    type="button"
+                    key={option.value}
+                    aria-pressed={programPath === option.value}
+                    onClick={() => {
+                      setProgramPath(option.value);
+                      if (option.value === "ADVANCED_MAJOR") {
+                        setSecondaryDepartment(null);
+                        setSecondaryMajorQuery("");
+                        setShowSecondaryDepartments(false);
+                      }
+                    }}
+                    className={`rounded-full border py-2.5 text-sm transition-colors ${
+                      programPath === option.value
+                        ? "border-[#6C4FD9] text-[#6C4FD9]"
+                        : "border-gray-200 text-gray-500"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm text-gray-500">
+                {needsSecondaryMajor ? "주전공" : "학과"}
+              </label>
               <div className="relative">
                 <input
                   value={majorQuery}
@@ -142,6 +266,10 @@ export default function MyAccountInfo({
                             setDepartment(item);
                             setMajorQuery(item.name);
                             setShowDepartments(false);
+                            if (secondaryDepartment?.code === item.code) {
+                              setSecondaryDepartment(null);
+                              setSecondaryMajorQuery("");
+                            }
                           }}
                           className="block w-full border-t border-gray-100 px-4 py-2 text-left first:border-t-0 hover:bg-purple-50"
                         >
@@ -159,6 +287,66 @@ export default function MyAccountInfo({
                 )}
               </div>
             </div>
+
+            {needsSecondaryMajor && (
+              <div>
+                <label className="mb-1 block text-sm text-gray-500">
+                  {programPath === "DOUBLE_MAJOR" ? "복수전공" : "부전공"}
+                </label>
+                <div className="relative">
+                  <input
+                    value={secondaryMajorQuery}
+                    onChange={(event) => {
+                      setSecondaryMajorQuery(event.target.value);
+                      setSecondaryDepartment(null);
+                      setShowSecondaryDepartments(true);
+                    }}
+                    onFocus={() => setShowSecondaryDepartments(true)}
+                    placeholder="추가 학과를 입력하세요"
+                    className="w-full rounded-lg border border-gray-200 px-4 py-3 text-sm outline-none focus:border-[#6C4FD9]"
+                  />
+                  {showSecondaryDepartments &&
+                    secondaryMajorQuery.trim() &&
+                    !secondaryDepartment && (
+                      <div className="absolute left-0 right-0 top-full z-20 -mt-px max-h-48 overflow-y-auto rounded-b-lg border border-gray-200 bg-white shadow-sm">
+                        {secondaryDepartmentsLoading && (
+                          <p className="px-4 py-3 text-xs text-gray-400">
+                            학과를 검색하고 있습니다.
+                          </p>
+                        )}
+                        {!secondaryDepartmentsLoading &&
+                          secondaryDepartments.length === 0 && (
+                            <p className="px-4 py-3 text-xs text-gray-400">
+                              주전공을 제외한 검색 결과가 없습니다.
+                            </p>
+                          )}
+                        {!secondaryDepartmentsLoading &&
+                          secondaryDepartments.map((item) => (
+                            <button
+                              type="button"
+                              key={item.code}
+                              onClick={() => {
+                                setSecondaryDepartment(item);
+                                setSecondaryMajorQuery(item.name);
+                                setShowSecondaryDepartments(false);
+                              }}
+                              className="block w-full border-t border-gray-100 px-4 py-2 text-left first:border-t-0 hover:bg-purple-50"
+                            >
+                              <span className="block text-sm text-gray-800">
+                                {item.name}
+                              </span>
+                              {item.collegeName && (
+                                <span className="text-[11px] text-gray-400">
+                                  {item.collegeName}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                </div>
+              </div>
+            )}
             <div>
               <label className="mb-1 block text-sm text-gray-500">학번</label>
               <input

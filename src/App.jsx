@@ -4321,6 +4321,7 @@ export default function App() {
             name: updatedUser.name,
             grade: updatedUser.grade,
             departmentId: updatedUser.departmentCode,
+            programPath: updatedUser.programPath,
             admissionYear:
               Number(String(updatedUser.studentId ?? "").slice(0, 4)) ||
               undefined,

@@ -7,8 +7,10 @@ export default function SignupInfoPage({
   onComplete,
   onBack,
 }) {
-  const [name, setName] = useState("");
-  const [studentId, setStudentId] = useState("");
+  const [name, setName] = useState(googleProfile?.name ?? "");
+  const [studentId, setStudentId] = useState(
+    googleProfile?.studentId ?? "",
+  );
   const [majorQuery, setMajorQuery] = useState("");
   const [major, setMajor] = useState(null);
   const [departments, setDepartments] = useState([]);
@@ -16,8 +18,34 @@ export default function SignupInfoPage({
   const [departmentsError, setDepartmentsError] = useState(null);
   const [grade, setGrade] = useState(null);
   const [showResults, setShowResults] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   const canSubmit = name && studentId && major && grade;
+
+  const handleSubmit = async () => {
+    if (!canSubmit || submitting) return;
+
+    setSubmitting(true);
+    setSubmitError("");
+
+    try {
+      await onComplete({
+        name: name.trim(),
+        studentId: studentId.trim(),
+        major: major.name,
+        departmentCode: major.code,
+        collegeName: major.collegeName,
+        grade,
+      });
+    } catch (error) {
+      setSubmitError(
+        error.message || "사용자 정보를 저장하지 못했습니다.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     const query = majorQuery.trim();
@@ -193,25 +221,25 @@ export default function SignupInfoPage({
           </div>
 
           <button
-            disabled={!canSubmit}
-            onClick={() =>
-              onComplete({
-                name,
-                studentId,
-                major: major.name,
-                departmentCode: major.code,
-                collegeName: major.collegeName,
-                grade,
-              })
-            }
+            disabled={!canSubmit || submitting}
+            onClick={handleSubmit}
             className={`w-full rounded-full py-3 font-medium ${
-              canSubmit
+              canSubmit && !submitting
                 ? "bg-[#6C4FD9] text-white"
                 : "bg-[#EAE4FB] text-[#B3A6E8]"
             }`}
           >
-            시작하기
+            {submitting ? "저장 중..." : "시작하기"}
           </button>
+
+          {submitError && (
+            <p
+              role="alert"
+              className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600"
+            >
+              {submitError}
+            </p>
+          )}
 
         </div>
       </div>

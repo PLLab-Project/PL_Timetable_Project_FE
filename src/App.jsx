@@ -28,6 +28,7 @@ import MyFavoriteTimetableList from "./pages/MyFavoriteTimetableList";
 import MyAccountInfo from "./pages/MyAccountInfo";
 import LoginPage from "./pages/LoginPage";
 import SignupInfoPage from "./pages/SignupInfoPage";
+import { getAuthSession, getGoogleLoginUrl } from "./api/auth";
 import { ApiError } from "./api/client";
 import {
   createCompletedCourse,
@@ -1627,13 +1628,30 @@ function formatCourseCredits(value) {
   return `${formatted}학점`;
 }
 
-function inferCourseArea(category = "") {
+function inferCourseArea(category = "", completionCategory = "") {
   if (category.includes("제1영역")) return "인간과 소통";
   if (category.includes("제2영역")) return "사회와 경제";
   if (category.includes("제3영역")) return "과학과 기술";
   if (category.includes("제4영역")) return "예술과 문화";
   if (category.includes("제5영역")) return "융합과 혁신";
   if (category.includes("제6영역")) return "디지털리터러시";
+
+  const normalizedCompletionCategory = String(
+    completionCategory ?? "",
+  ).replace(/\s/g, "");
+  if (
+    normalizedCompletionCategory === "전필" ||
+    normalizedCompletionCategory === "전공필수"
+  ) {
+    return "전공필수";
+  }
+  if (
+    normalizedCompletionCategory === "전선" ||
+    normalizedCompletionCategory === "전공선택"
+  ) {
+    return "전공선택";
+  }
+
   if (category.includes("교양필수") || category === "교필") return "교양필수";
   if (category.includes("교양선택") || category === "교선") return "교양선택";
   if (category.includes("일반선택") || category === "일선") return "일반선택";
@@ -1641,7 +1659,13 @@ function inferCourseArea(category = "") {
   return "";
 }
 
-function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
+function CourseInputForm({
+  initial,
+  semesterId,
+  preferredAcademicUnitCode,
+  onSave,
+  onCancel,
+}) {
   const [name, setName] = useState(initial?.name || "");
   const [area, setArea] = useState(initial?.area || "");
   const [credits, setCredits] = useState(initial?.credits || "");
@@ -1660,6 +1684,7 @@ function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
   const areaMenuRef = useRef(null);
   const creditsMenuRef = useRef(null);
   const searchRequestId = useRef(0);
+  const areaRequestId = useRef(0);
 
   useEffect(() => {
     const requestId = searchRequestId.current + 1;
@@ -1756,6 +1781,7 @@ function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
           <input
             value={name}
             onChange={(event) => {
+              areaRequestId.current += 1;
               setName(event.target.value);
               setSelectedCourse(null);
               setSearchResults([]);
@@ -1789,9 +1815,14 @@ function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
                 <button
                   type="button"
                   key={course.id}
-                  onClick={() => {
+                  onClick={async () => {
+                    const requestId = areaRequestId.current + 1;
+                    areaRequestId.current = requestId;
                     const nextCredits = formatCourseCredits(course.credits);
-                    const inferredArea = inferCourseArea(course.category);
+                    const inferredArea = inferCourseArea(
+                      course.category,
+                      course.completionCategory,
+                    );
 
                     setName(course.name);
                     setSelectedCourse(course);
@@ -1808,6 +1839,41 @@ function CourseInputForm({ initial, semesterId, onSave, onCancel }) {
                     setSearchResults([]);
                     setSearchError("");
                     setSearchOpen(false);
+
+                    if (
+                      !preferredAcademicUnitCode ||
+                      !course.courseCode ||
+                      !semesterId
+                    ) {
+                      return;
+                    }
+
+                    try {
+                      const sections = await getAllSections({
+                        semesterId,
+                        query: course.courseCode,
+                        preferredAcademicUnitCode,
+                      });
+                      const matchedSection = sections.find(
+                        (section) => section.courseCode === course.courseCode,
+                      );
+                      const resolvedArea = inferCourseArea(
+                        matchedSection?.category ?? course.category,
+                        matchedSection?.completionCategory,
+                      );
+
+                      if (
+                        areaRequestId.current === requestId &&
+                        resolvedArea
+                      ) {
+                        setArea(resolvedArea);
+                        setShowLiberalAreas(
+                          courseLiberalAreaOptions.includes(resolvedArea),
+                        );
+                      }
+                    } catch {
+                      // 학과별 이수구분 조회 실패 시 과목 기본 분류를 유지합니다.
+                    }
                   }}
                   className="block w-full border-b border-[#ededed] px-2 py-2 text-left last:border-b-0 hover:bg-[#f5f5f5]"
                 >
@@ -2356,7 +2422,12 @@ function completedCourseRequest(values, fallbackSemesterId) {
   };
 }
 
-function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
+function MyCoursesPage({
+  semesterId,
+  preferredAcademicUnitCode,
+  onTimetable,
+  onMyPage,
+}) {
   const [courses, setCourses] = useState([]);
   const [drafts, setDrafts] = useState([
     { key: "initial", editingId: null, initial: null },
@@ -2548,6 +2619,7 @@ function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
               key={draft.key}
               initial={draft.initial}
               semesterId={semesterId}
+              preferredAcademicUnitCode={preferredAcademicUnitCode}
               onSave={(values) => saveCourse(draft, values)}
               onCancel={() =>
                 setDrafts((current) =>
@@ -2636,7 +2708,12 @@ function MyCoursesPage({ semesterId, onTimetable, onMyPage }) {
 }
 
 export default function App() {
-  const [authStep, setAuthStep] = useState("login");
+  const [authStep, setAuthStep] = useState("checking");
+  const [loginError, setLoginError] = useState("");
+  const [googleAuthResult] = useState(() => {
+    const currentUrl = new URL(window.location.href);
+    return currentUrl.searchParams.get("auth");
+  });
   const [currentTab, setCurrentTab] = useState("timetable");
   const [selectedTimetableId, setSelectedTimetableId] = useState(null);
   const [timetableReturnTab, setTimetableReturnTab] = useState("mytimetablelist");
@@ -2736,6 +2813,77 @@ export default function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const currentUrl = new URL(window.location.href);
+
+    if (googleAuthResult) {
+      currentUrl.searchParams.delete("auth");
+      window.history.replaceState(
+        {},
+        "",
+        `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+      );
+    }
+
+    if (googleAuthResult === "google-failure") {
+      setLoginError(
+        "Google 로그인에 실패했습니다. 계정을 확인한 뒤 다시 시도해 주세요.",
+      );
+      setAuthStep("login");
+      return () => controller.abort();
+    }
+
+    setLoginError("");
+
+    getAuthSession(controller.signal)
+      .then((session) => {
+        if (!session?.authenticated) {
+          throw new ApiError(
+            401,
+            "AUTH_SESSION_EXPIRED",
+            "로그인이 필요합니다.",
+          );
+        }
+
+        return getCurrentUser(controller.signal).then((profile) => ({
+          profile,
+          sessionUser: session.user,
+        }));
+      })
+      .then(({ profile, sessionUser }) => {
+        const mappedProfile = mapUserProfile(profile, {
+          id: sessionUser?.id,
+          name: sessionUser?.name,
+          studentId: sessionUser?.studentNumber,
+        });
+
+        setUser(mappedProfile);
+        setCurrentTab("timetable");
+        setAuthStep(
+          mappedProfile.profileCompleted ? "app" : "signup",
+        );
+      })
+      .catch((error) => {
+        if (error.name === "AbortError") return;
+
+        setUser(null);
+        setAuthStep("login");
+
+        if (
+          googleAuthResult === "google-success" ||
+          (error.status !== 401 && error.code !== "AUTH_SESSION_EXPIRED")
+        ) {
+          setLoginError(
+            error.message ||
+              "로그인 상태를 확인하지 못했습니다. 다시 시도해 주세요.",
+          );
+        }
+      });
+
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -3695,10 +3843,26 @@ export default function App() {
     dragStartX.current = null;
   };
 
+  if (authStep === "checking") {
+    return <LoginPage checking onGoogleLogin={() => {}} />;
+  }
+
   if (authStep === "login") {
     return (
       <LoginPage
-        onGoogleLogin={() => setAuthStep("signup")}
+        error={loginError}
+        onGoogleLogin={() => {
+          setLoginError("");
+
+          try {
+            window.location.assign(getGoogleLoginUrl());
+          } catch (error) {
+            setLoginError(
+              error.message ||
+                "Google 로그인을 시작하지 못했습니다.",
+            );
+          }
+        }}
       />
     );
   }
@@ -3706,31 +3870,24 @@ export default function App() {
   if (authStep === "signup") {
     return (
       <SignupInfoPage
+        googleProfile={user}
         onBack={() => setAuthStep("login")}
         onComplete={async (info) => {
-          setUser(info);
+          const saved = await updateCurrentUser({
+            studentNumber: info.studentId,
+            name: info.name,
+            grade: info.grade,
+            departmentId: info.departmentCode,
+            admissionYear:
+              Number(String(info.studentId ?? "").slice(0, 4)) || undefined,
+          });
+          const mappedProfile = mapUserProfile(saved, info);
+
+          setUser(mappedProfile);
           setAuthStep("app");
           setCurrentTab("timetable");
-          if (!hasCompletedTutorial(info)) {
+          if (!hasCompletedTutorial(mappedProfile)) {
             setShowFirstLoginTutorial(true);
-          }
-
-          try {
-            const saved = await updateCurrentUser({
-              studentNumber: info.studentId,
-              name: info.name,
-              grade: info.grade,
-              departmentId: info.departmentCode,
-              admissionYear:
-                Number(String(info.studentId ?? "").slice(0, 4)) || undefined,
-            });
-            setUser(mapUserProfile(saved, info));
-          } catch (error) {
-            if (error.status !== 401) {
-              setTimetableSyncError(
-                error.message || "사용자 정보를 서버에 저장하지 못했습니다.",
-              );
-            }
           }
         }}
       />
@@ -3741,6 +3898,7 @@ export default function App() {
     return (
       <MyCoursesPage
         semesterId={currentSemesterId}
+        preferredAcademicUnitCode={user?.departmentCode}
         onTimetable={() => setCurrentTab("timetable")}
         onMyPage={() => setCurrentTab("mypage")}
       />

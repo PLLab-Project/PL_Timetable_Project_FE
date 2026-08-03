@@ -6,6 +6,7 @@ import {
   ChevronRight,
   GraduationCap,
   LockKeyhole,
+  MousePointer2,
   Search,
   Sparkles,
   WandSparkles,
@@ -19,6 +20,14 @@ const TUTORIAL_STEPS = [
       "강의를 검색하고 카드를 선택한 뒤 ‘시간표에 추가’를 누르면 원하는 시간표를 직접 만들 수 있어요.",
     icon: Search,
     visual: "manual",
+  },
+  {
+    eyebrow: "시간대로 강의 찾기",
+    title: "원하는 시간대를 드래그해요",
+    description:
+      "시간표에서 원하는 시간대를 드래그하면 그 시간에 해당하는 강의만 목록에 보여요. 여러 구간을 선택할 수 있고, 선택한 구간을 한 번 누르면 해제돼요.",
+    icon: MousePointer2,
+    visual: "time-filter",
   },
   {
     eyebrow: "자동 시간표 편성",
@@ -183,6 +192,55 @@ function TutorialIllustration({ type }) {
             </div>
           </div>
 
+        </div>
+      </div>
+    );
+  }
+
+  if (type === "time-filter") {
+    return (
+      <div className="tutorial-visual h-[252px] rounded-[24px] bg-[#f7f5ff] p-4">
+        <div className="overflow-hidden rounded-[16px] border border-[#e6e2ee] bg-white">
+          <div className="grid h-6 grid-cols-5 border-b border-[#eceaf0] text-center text-[8px] leading-6 text-[#888]">
+            {["월", "화", "수", "목", "금"].map((day) => (
+              <span key={day} className="border-r border-[#eceaf0] last:border-r-0">
+                {day}
+              </span>
+            ))}
+          </div>
+          <div
+            className="relative h-[110px]"
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(to right, transparent 0 calc(20% - 1px), #eceaf0 calc(20% - 1px) 20%), repeating-linear-gradient(to bottom, transparent 0 calc(25% - 1px), #eceaf0 calc(25% - 1px) 25%)",
+            }}
+          >
+            <div className="absolute left-[20%] top-[25%] h-[50%] w-[40%] bg-brand/15">
+              <span className="flex h-full items-center justify-center gap-1 text-[8px] font-semibold text-brand">
+                <MousePointer2 size={13} />
+                드래그 선택
+              </span>
+            </div>
+            <div className="absolute left-[80%] top-[75%] h-[25%] w-[20%] bg-brand/15" />
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-[14px] bg-white px-3 py-2.5 shadow-[0_6px_18px_rgba(50,32,95,0.07)]">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[9px] font-bold text-brand">
+              선택 시간에 맞는 강의
+            </span>
+            <span className="text-[8px] text-[#aaa]">3개</span>
+          </div>
+          <div className="flex items-center justify-between rounded-[9px] border border-[#ebe8f0] px-2.5 py-2">
+            <div>
+              <p className="text-[10px] font-bold">웹 프로그래밍</p>
+              <p className="mt-0.5 text-[8px] text-[#999]">화 10:00-11:30</p>
+            </div>
+            <span className="rounded-full bg-brand-soft px-2 py-1 text-[8px] font-bold text-brand">
+              + 추가
+            </span>
+          </div>
         </div>
       </div>
     );

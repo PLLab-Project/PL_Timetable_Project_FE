@@ -11,6 +11,7 @@ import {
   GraduationCap,
   ImagePlus,
   LayoutList,
+  LoaderCircle,
   WandSparkles,
   Pencil,
   Plus,
@@ -364,6 +365,20 @@ function getTimetableBlocks(course, preview = false) {
       span: course.span,
       room: course.room,
     }));
+}
+
+function canUseAsOptimizationCandidate(course) {
+  return (
+    Boolean(getSectionKey(course)) &&
+    !course?.timeToBeAnnounced &&
+    getTimetableBlocks(course).some(
+      (block) =>
+        Number.isInteger(block.day) &&
+        Number.isFinite(block.start) &&
+        Number.isFinite(block.span) &&
+        block.span > 0,
+    )
+  );
 }
 
 function getConflictingCourses(course, selectedCourses) {
@@ -1629,33 +1644,50 @@ function formatCourseCredits(value) {
 }
 
 function inferCourseArea(category = "", completionCategory = "") {
-  if (category.includes("제1영역")) return "인간과 소통";
-  if (category.includes("제2영역")) return "사회와 경제";
-  if (category.includes("제3영역")) return "과학과 기술";
-  if (category.includes("제4영역")) return "예술과 문화";
-  if (category.includes("제5영역")) return "융합과 혁신";
-  if (category.includes("제6영역")) return "디지털리터러시";
+  const trimmedCategory = String(category ?? "").trim();
+  const normalizedCategory = trimmedCategory.replace(/\s/g, "");
+
+  if (courseLiberalAreaOptions.includes(trimmedCategory)) {
+    return trimmedCategory;
+  }
+
+  if (trimmedCategory.includes("제1영역")) return "인간과 소통";
+  if (trimmedCategory.includes("제2영역")) return "사회와 경제";
+  if (trimmedCategory.includes("제3영역")) return "과학과 기술";
+  if (trimmedCategory.includes("제4영역")) return "예술과 문화";
+  if (trimmedCategory.includes("제5영역")) return "융합과 혁신";
+  if (trimmedCategory.includes("제6영역")) return "디지털리터러시";
 
   const normalizedCompletionCategory = String(
     completionCategory ?? "",
   ).replace(/\s/g, "");
   if (
+    normalizedCategory === "전필" ||
+    normalizedCategory === "전공필수" ||
     normalizedCompletionCategory === "전필" ||
     normalizedCompletionCategory === "전공필수"
   ) {
     return "전공필수";
   }
   if (
+    normalizedCategory === "전선" ||
+    normalizedCategory === "전공선택" ||
     normalizedCompletionCategory === "전선" ||
     normalizedCompletionCategory === "전공선택"
   ) {
     return "전공선택";
   }
 
-  if (category.includes("교양필수") || category === "교필") return "교양필수";
-  if (category.includes("교양선택") || category === "교선") return "교양선택";
-  if (category.includes("일반선택") || category === "일선") return "일반선택";
-  if (category.includes("교직")) return "교직";
+  if (trimmedCategory.includes("교양필수") || trimmedCategory === "교필") {
+    return "교양필수";
+  }
+  if (trimmedCategory.includes("교양선택") || trimmedCategory === "교선") {
+    return "교양선택";
+  }
+  if (trimmedCategory.includes("일반선택") || trimmedCategory === "일선") {
+    return "일반선택";
+  }
+  if (trimmedCategory.includes("교직")) return "교직";
   return "";
 }
 
@@ -2400,6 +2432,40 @@ function mapCompletedCourse(course) {
   };
 }
 
+function mapRecognizedCourseToDraftInitial(course, fallbackSemesterId) {
+  const hasRecognizedCredits =
+    course?.credits !== null &&
+    course?.credits !== undefined &&
+    course?.credits !== "";
+  const recognizedCredits = hasRecognizedCredits
+    ? Number(course.credits)
+    : Number.NaN;
+  const gradingBasis = course?.gradingBasis || "LETTER";
+  const inferredArea =
+    inferCourseArea(course?.area) ||
+    inferCourseArea(course?.category, course?.category);
+
+  return {
+    name: String(course?.courseName ?? "").trim(),
+    area: inferredArea || course?.area || course?.category || "",
+    credits:
+      gradingBasis === "PASS_FAIL"
+        ? "P/N"
+        : hasRecognizedCredits
+          ? formatCourseCredits(course.credits)
+          : "",
+    actualCredits: Number.isFinite(recognizedCredits)
+      ? recognizedCredits
+      : 0,
+    courseCode: null,
+    semesterId: course?.semester || fallbackSemesterId || null,
+    sourceCategory: course?.category || null,
+    gradingBasis,
+    gradeValue: gradingBasis === "PASS_FAIL" ? "P" : "",
+    ocrConfidence: course?.confidence ?? null,
+  };
+}
+
 function completedCourseRequest(values, fallbackSemesterId) {
   const isLiberalArea = courseLiberalAreaOptions.includes(values.area);
   const isPassFail = values.credits === "P/N";
@@ -2437,6 +2503,7 @@ function MyCoursesPage({
   const [requestError, setRequestError] = useState("");
   const [savingDraftKey, setSavingDraftKey] = useState(null);
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrNotice, setOcrNotice] = useState("");
   const ocrInputRef = useRef(null);
 
   useEffect(() => {
@@ -2547,19 +2614,30 @@ function MyCoursesPage({
 
     setOcrLoading(true);
     setRequestError("");
+    setOcrNotice("");
 
     try {
-      await recognizeCompletedCourses(file);
-      setDrafts((current) =>
-        current.length > 0
-          ? current
-          : [
-              {
-                key: `ocr-${Date.now()}`,
-                editingId: null,
-                initial: null,
-              },
-            ],
+      const result = await recognizeCompletedCourses(file);
+      const recognizedCourses = (result?.recognizedCourses ?? []).filter(
+        (course) => String(course?.courseName ?? "").trim(),
+      );
+
+      if (recognizedCourses.length === 0) {
+        throw new Error(
+          "이미지에서 과목 정보를 찾지 못했습니다. 글자가 선명한 성적표 이미지로 다시 시도해주세요.",
+        );
+      }
+
+      const importedAt = Date.now();
+      const importedDrafts = recognizedCourses.map((course, index) => ({
+        key: `ocr-${importedAt}-${index}`,
+        editingId: null,
+        initial: mapRecognizedCourseToDraftInitial(course, semesterId),
+      }));
+
+      setDrafts((current) => [...current, ...importedDrafts]);
+      setOcrNotice(
+        `${recognizedCourses.length}개 과목을 인식했습니다. 내용을 확인한 뒤 각각 저장해주세요.`,
       );
     } catch (error) {
       setRequestError(
@@ -2567,6 +2645,7 @@ function MyCoursesPage({
           ? "로그인 세션이 없어 이미지 OCR을 사용할 수 없습니다."
           : error.message || "이미지에서 강의 정보를 읽지 못했습니다.",
       );
+      setOcrNotice("");
     } finally {
       setOcrLoading(false);
       if (ocrInputRef.current) ocrInputRef.current.value = "";
@@ -2592,12 +2671,21 @@ function MyCoursesPage({
           type="button"
           onClick={() => ocrInputRef.current?.click()}
           disabled={ocrLoading}
-          className="mt-7 flex h-[53px] w-full flex-col items-center justify-center rounded-[14px] border border-brand text-brand"
+          className="mt-7 flex h-[53px] w-full flex-col items-center justify-center rounded-[14px] border border-brand text-brand disabled:cursor-wait disabled:opacity-70"
         >
           <span className="flex items-center gap-1 text-[15px] font-semibold">
-            <ImagePlus size={14} /> 이미지로 가져오기
+            {ocrLoading ? (
+              <LoaderCircle size={14} className="animate-spin" />
+            ) : (
+              <ImagePlus size={14} />
+            )}
+            {ocrLoading ? "이미지를 분석하고 있어요" : "이미지로 가져오기"}
           </span>
-          <span className="mt-0.5 text-[10px] text-[#aaa]">에타 시간표로 편하게 입력하세요</span>
+          <span className="mt-0.5 text-[10px] text-[#aaa]">
+            {ocrLoading
+              ? "과목 정보를 읽는 동안 잠시만 기다려주세요"
+              : "에타 시간표로 편하게 입력하세요"}
+          </span>
         </button>
         <input
           ref={ocrInputRef}
@@ -2638,6 +2726,14 @@ function MyCoursesPage({
         {requestError && (
           <p className="mt-2 rounded-[10px] bg-red-50 px-3 py-2 text-[10px] leading-4 text-red-600">
             {requestError}
+          </p>
+        )}
+        {ocrNotice && (
+          <p
+            aria-live="polite"
+            className="mt-2 rounded-[10px] bg-[#f5f1ff] px-3 py-2 text-[10px] leading-4 text-brand"
+          >
+            {ocrNotice}
           </p>
         )}
         {loading && (
@@ -3511,6 +3607,9 @@ export default function App() {
     const invalidLockedCourse = lockedCourses.find(
       (course) => !getSectionKey(course),
     );
+    const unscheduledLockedCourse = lockedCourses.find(
+      (course) => !canUseAsOptimizationCandidate(course),
+    );
 
     setOptimizationError(null);
     setOptimizationLoading(true);
@@ -3522,6 +3621,12 @@ export default function App() {
         );
       }
 
+      if (unscheduledLockedCourse) {
+        throw new Error(
+          `‘${unscheduledLockedCourse.name}’ 강의는 수업시간이 미정이라 고정 강의로 자동편성에 사용할 수 없습니다.`,
+        );
+      }
+
       const lockedCourseKeys = new Set(
         lockedCourses.map(getSectionKey).filter(Boolean),
       );
@@ -3530,7 +3635,7 @@ export default function App() {
         .filter(Boolean);
       const hasCandidateFilters =
         categoryFilters.length > 0 || preferredGrades.length > 0;
-      const filteredCandidates = hasCandidateFilters
+      const candidatePool = hasCandidateFilters
         ? await getAllSections(
             {
               semesterId:
@@ -3542,10 +3647,19 @@ export default function App() {
             controller.signal,
           )
         : [];
+      const filteredCandidates = candidatePool.filter(
+        canUseAsOptimizationCandidate,
+      );
+
+      if (hasCandidateFilters && candidatePool.length === 0) {
+        throw new Error(
+          "선택한 학년·교양 조건에 맞는 후보 강의가 없습니다. 조건을 줄여서 다시 시도해주세요.",
+        );
+      }
 
       if (hasCandidateFilters && filteredCandidates.length === 0) {
         throw new Error(
-          "선택한 학년·교양 조건에 맞는 후보 강의가 없습니다. 조건을 줄여서 다시 시도해주세요.",
+          "선택한 조건에 수업시간이 확정된 후보 강의가 없습니다. 조건을 바꿔서 다시 시도해주세요.",
         );
       }
 

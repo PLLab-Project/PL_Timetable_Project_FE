@@ -1,15 +1,11 @@
-import { API_BASE_URL, ApiError, apiFetch } from "./client";
+import { USE_SAME_ORIGIN_API, apiFetch, createApiUrl } from "./client";
 
 export function getGoogleLoginUrl() {
-  if (!API_BASE_URL) {
-    throw new ApiError(
-      0,
-      "API_BASE_URL_NOT_CONFIGURED",
-      "VITE_API_BASE_URL 환경변수가 설정되지 않았습니다.",
-    );
+  if (USE_SAME_ORIGIN_API) {
+    return "/oauth2/authorization/google";
   }
 
-  return `${API_BASE_URL}/api/v1/auth/google`;
+  return createApiUrl("/api/v1/auth/google");
 }
 
 export function getAuthSession(signal) {

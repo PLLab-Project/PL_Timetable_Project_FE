@@ -1,6 +1,13 @@
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
+const rawSameOriginSetting =
+  import.meta.env.VITE_USE_SAME_ORIGIN_API?.trim().toLowerCase();
 
-export const API_BASE_URL = rawApiBaseUrl.replace(/\/+$/, "");
+export const USE_SAME_ORIGIN_API =
+  import.meta.env.PROD && rawSameOriginSetting !== "false";
+
+export const API_BASE_URL = USE_SAME_ORIGIN_API
+  ? ""
+  : rawApiBaseUrl.replace(/\/+$/, "");
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -15,7 +22,13 @@ export class ApiError extends Error {
 
 let csrfToken = null;
 
-function createApiUrl(path) {
+export function createApiUrl(path) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+  if (USE_SAME_ORIGIN_API) {
+    return normalizedPath;
+  }
+
   if (!API_BASE_URL) {
     throw new ApiError(
       0,
@@ -24,7 +37,7 @@ function createApiUrl(path) {
     );
   }
 
-  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${API_BASE_URL}${normalizedPath}`;
 }
 
 async function readEnvelope(response) {

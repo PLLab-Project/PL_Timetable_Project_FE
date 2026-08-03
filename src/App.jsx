@@ -2490,6 +2490,84 @@ function mapRecognizedCourseToDraftInitial(course, fallbackSemesterId) {
   };
 }
 
+function normalizeCourseNameForMatch(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/\s/g, "")
+    .toLocaleLowerCase("ko-KR");
+}
+
+async function enrichRecognizedCourseInitial(
+  course,
+  fallbackSemesterId,
+  preferredAcademicUnitCode,
+  sectionLookupCache,
+) {
+  const initial = mapRecognizedCourseToDraftInitial(
+    course,
+    fallbackSemesterId,
+  );
+  const normalizedCourseName = normalizeCourseNameForMatch(initial.name);
+  if (!normalizedCourseName) return initial;
+
+  const lookupSemesterIds = [course?.semester, fallbackSemesterId]
+    .map((value) => String(value ?? "").trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+
+  for (const lookupSemesterId of lookupSemesterIds) {
+    const cacheKey = `${lookupSemesterId}:${normalizedCourseName}`;
+    if (!sectionLookupCache.has(cacheKey)) {
+      sectionLookupCache.set(
+        cacheKey,
+        getAllSections({
+          semesterId: lookupSemesterId,
+          query: initial.name,
+          preferredAcademicUnitCode,
+        }).catch(() => []),
+      );
+    }
+
+    const sections = await sectionLookupCache.get(cacheKey);
+    const matchedSection = sections.find(
+      (section) =>
+        normalizeCourseNameForMatch(section.name) === normalizedCourseName,
+    );
+    if (!matchedSection) continue;
+
+    const matchedCredits = Number(matchedSection.credits);
+    const matchedArea = inferCourseArea(
+      matchedSection.category,
+      matchedSection.completionCategory,
+    );
+    const hasSupportedInitialArea = [
+      ...courseAreaOptions,
+      ...courseLiberalAreaOptions,
+    ].includes(initial.area);
+
+    return {
+      ...initial,
+      area: hasSupportedInitialArea ? initial.area : matchedArea || initial.area,
+      credits:
+        initial.credits ||
+        (initial.gradingBasis === "PASS_FAIL"
+          ? "P/N"
+          : formatCourseCredits(matchedSection.credits)),
+      actualCredits:
+        initial.actualCredits ||
+        (Number.isFinite(matchedCredits) ? matchedCredits : 0),
+      courseCode: matchedSection.courseCode || initial.courseCode,
+      semesterId:
+        course?.semester ||
+        matchedSection.semesterId ||
+        initial.semesterId,
+      sourceCategory:
+        initial.sourceCategory || matchedSection.category || null,
+    };
+  }
+
+  return initial;
+}
+
 function completedCourseRequest(values, fallbackSemesterId) {
   const isLiberalArea = courseLiberalAreaOptions.includes(values.area);
   const isPassFail = values.credits === "P/N";
@@ -2652,16 +2730,32 @@ function MyCoursesPage({
         );
       }
 
+      const sectionLookupCache = new Map();
+      const importedInitials = await Promise.all(
+        recognizedCourses.map((course) =>
+          enrichRecognizedCourseInitial(
+            course,
+            semesterId,
+            preferredAcademicUnitCode,
+            sectionLookupCache,
+          ),
+        ),
+      );
       const importedAt = Date.now();
-      const importedDrafts = recognizedCourses.map((course, index) => ({
+      const importedDrafts = importedInitials.map((initial, index) => ({
         key: `ocr-${importedAt}-${index}`,
         editingId: null,
-        initial: mapRecognizedCourseToDraftInitial(course, semesterId),
+        initial,
       }));
+      const incompleteCourseCount = importedInitials.filter(
+        (initial) => !initial.area || !initial.credits,
+      ).length;
 
       setDrafts((current) => [...current, ...importedDrafts]);
       setOcrNotice(
-        `${recognizedCourses.length}개 과목을 인식했습니다. 내용을 확인한 뒤 각각 저장해주세요.`,
+        incompleteCourseCount > 0
+          ? `${recognizedCourses.length}개 과목을 인식했습니다. 강의 정보가 없는 ${incompleteCourseCount}개 과목은 영역과 학점을 확인해주세요.`
+          : `${recognizedCourses.length}개 과목을 인식하고 영역과 학점을 자동 입력했습니다. 내용을 확인한 뒤 각각 저장해주세요.`,
       );
     } catch (error) {
       setRequestError(

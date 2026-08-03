@@ -205,13 +205,27 @@ function toTimetableSectionRequests(courses) {
 }
 
 function getAvailableTimes(preferredTimes) {
-  if (!preferredTimes?.length) {
-    return [];
-  }
+  const ranges = (preferredTimes?.length
+    ? preferredTimes
+        .map((time) => PREFERRED_TIME_RANGES[time])
+        .filter(Boolean)
+    : [[9, 22]])
+    .map(([startHour, endHour]) => [startHour, endHour])
+    .sort((first, second) => first[0] - second[0]);
 
-  return preferredTimes
-    .map((time) => PREFERRED_TIME_RANGES[time])
-    .filter(Boolean)
+  const mergedRanges = ranges.reduce((merged, range) => {
+    const previous = merged[merged.length - 1];
+
+    if (previous && range[0] <= previous[1]) {
+      previous[1] = Math.max(previous[1], range[1]);
+      return merged;
+    }
+
+    merged.push(range);
+    return merged;
+  }, []);
+
+  return mergedRanges
     .map(([startHour, endHour]) => ({
       startTime: `${String(startHour).padStart(2, "0")}:00:00`,
       endTime: `${String(endHour).padStart(2, "0")}:00:00`,
@@ -221,6 +235,16 @@ function getAvailableTimes(preferredTimes) {
 function getOptimizationErrorMessage(error) {
   if (error?.name === "AbortError") {
     return null;
+  }
+
+  const message = error?.message ?? "";
+
+  if (message.includes("제한 시간")) {
+    return "후보 강의가 너무 많아 서버가 제한 시간 안에 계산하지 못했습니다. 학년 또는 교양 조건을 하나 이상 선택해 후보를 줄인 뒤 다시 시도해주세요.";
+  }
+
+  if (message.includes("조건에 맞는 시간표 조합")) {
+    return "선택한 시간대·공강 요일·학점 조건을 모두 만족하는 조합이 없습니다. 시간대를 추가하거나 최소 학점을 낮춰주세요.";
   }
 
   if (error instanceof ApiError) {

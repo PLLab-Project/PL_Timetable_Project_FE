@@ -218,13 +218,46 @@ export default function SignupInfoPage({
             <input
               value={studentId}
               onChange={(e) => setStudentId(e.target.value)}
-              placeholder={googleProfile?.studentId ?? "20221234"}
+              placeholder={googleProfile?.studentId || "20001234"}
               className="w-full border-b py-2 outline-none placeholder:text-gray-400"
             />
           </div>
 
+          <div className="mb-6">
+            <label className="text-sm font-medium">
+              복수전공·부전공 여부
+            </label>
+
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {PROGRAM_PATH_OPTIONS.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  aria-pressed={programPath === option.value}
+                  onClick={() => {
+                    setProgramPath(option.value);
+                    if (option.value === "ADVANCED_MAJOR") {
+                      setSecondaryMajor(null);
+                      setSecondaryMajorQuery("");
+                      setShowSecondaryResults(false);
+                    }
+                  }}
+                  className={`rounded-full border py-2 text-sm transition-colors ${
+                    programPath === option.value
+                      ? "border-purple-600 text-purple-600"
+                      : "border-gray-200 text-gray-500"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="mb-6 relative">
-            <label className="text-sm font-medium">주전공</label>
+            <label className="text-sm font-medium">
+              {needsSecondaryMajor ? "주전공" : "학과"}
+            </label>
 
             <input
               value={majorQuery}
@@ -285,37 +318,6 @@ export default function SignupInfoPage({
                   ))}
               </ul>
             )}
-          </div>
-
-          <div className="mb-6">
-            <label className="text-sm font-medium">
-              복수전공·부전공 여부
-            </label>
-
-            <div className="mt-2 grid grid-cols-3 gap-2">
-              {PROGRAM_PATH_OPTIONS.map((option) => (
-                <button
-                  type="button"
-                  key={option.value}
-                  aria-pressed={programPath === option.value}
-                  onClick={() => {
-                    setProgramPath(option.value);
-                    if (option.value === "ADVANCED_MAJOR") {
-                      setSecondaryMajor(null);
-                      setSecondaryMajorQuery("");
-                      setShowSecondaryResults(false);
-                    }
-                  }}
-                  className={`rounded-full border py-2 text-sm transition-colors ${
-                    programPath === option.value
-                      ? "border-purple-600 text-purple-600"
-                      : "border-gray-200 text-gray-500"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
           </div>
 
           {needsSecondaryMajor && (

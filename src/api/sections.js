@@ -98,6 +98,7 @@ export function mapSectionToCourse(section) {
     credits: section.credits,
     ratingAverage: section.ratingAverage,
     reviewCount: section.reviewCount,
+    classifications: section.classifications ?? [],
     timeToBeAnnounced: Boolean(section.timeToBeAnnounced),
     blocks: (section.sessions ?? []).map(mapSessionToBlock).filter(Boolean),
     color: colorForSection(section),

@@ -1715,10 +1715,95 @@ function inferCourseArea(category = "", completionCategory = "") {
   return "";
 }
 
+function normalizeAcademicUnitName(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\s()/·ㆍ_-]/g, "")
+    .toLocaleLowerCase("ko-KR");
+}
+
+function categoryBelongsToUserMajor(category, userMajorName) {
+  const normalizedCategory = normalizeAcademicUnitName(category);
+  const normalizedMajor = normalizeAcademicUnitName(userMajorName);
+  const majorBaseName = normalizedMajor.replace(/(?:학과|전공)$/, "");
+
+  return Boolean(
+    normalizedCategory &&
+      normalizedMajor &&
+      (normalizedCategory.includes(normalizedMajor) ||
+        (majorBaseName.length >= 2 &&
+          normalizedCategory.includes(majorBaseName))),
+  );
+}
+
+function isMajorArea(value) {
+  const normalized = String(value ?? "").replace(/\s/g, "");
+  return ["전필", "전선", "전공필수", "전공선택"].includes(normalized);
+}
+
+function resolveCourseAreaForUser(
+  section,
+  preferredAcademicUnitCode,
+  userMajorName,
+) {
+  const classifications = section?.classifications ?? [];
+  const ownClassification = preferredAcademicUnitCode
+    ? classifications.find(
+        (classification) =>
+          classification.academicUnitCode === preferredAcademicUnitCode,
+      )
+    : null;
+  const ownArea = inferCourseArea(
+    section?.category,
+    ownClassification?.completionCategory,
+  );
+  if (ownClassification && ownArea) return ownArea;
+
+  const categoryArea = inferCourseArea(section?.category);
+  const hasMajorClassification = classifications.some((classification) =>
+    isMajorArea(classification.completionCategory),
+  );
+  const normalizedCategory = String(section?.category ?? "").replace(
+    /\s/g,
+    "",
+  );
+  const isMajorCourse =
+    hasMajorClassification ||
+    isMajorArea(categoryArea) ||
+    normalizedCategory.startsWith("전공");
+
+  if (!isMajorCourse) return categoryArea;
+  if (categoryBelongsToUserMajor(section?.category, userMajorName)) {
+    return isMajorArea(categoryArea) ? categoryArea : "전공선택";
+  }
+  if (preferredAcademicUnitCode || userMajorName) return "일반선택";
+
+  return categoryArea;
+}
+
+function findPreferredSection(
+  sections,
+  predicate,
+  preferredAcademicUnitCode,
+) {
+  const matchedSections = sections.filter(predicate);
+  if (!preferredAcademicUnitCode) return matchedSections[0];
+
+  return (
+    matchedSections.find((section) =>
+      section.classifications?.some(
+        (classification) =>
+          classification.academicUnitCode === preferredAcademicUnitCode,
+      ),
+    ) ?? matchedSections[0]
+  );
+}
+
 function CourseInputForm({
   initial,
   semesterId,
   preferredAcademicUnitCode,
+  userMajorName,
   onSave,
   onCancel,
 }) {
@@ -1910,12 +1995,15 @@ function CourseInputForm({
                         query: course.courseCode,
                         preferredAcademicUnitCode,
                       });
-                      const matchedSection = sections.find(
+                      const matchedSection = findPreferredSection(
+                        sections,
                         (section) => section.courseCode === course.courseCode,
+                        preferredAcademicUnitCode,
                       );
-                      const resolvedArea = inferCourseArea(
-                        matchedSection?.category ?? course.category,
-                        matchedSection?.completionCategory,
+                      const resolvedArea = resolveCourseAreaForUser(
+                        matchedSection ?? course,
+                        preferredAcademicUnitCode,
+                        userMajorName,
                       );
 
                       if (
@@ -2471,7 +2559,7 @@ function mapRecognizedCourseToDraftInitial(course, fallbackSemesterId) {
 
   return {
     name: String(course?.courseName ?? "").trim(),
-    area: inferredArea || course?.area || course?.category || "",
+    area: inferredArea,
     credits:
       gradingBasis === "PASS_FAIL"
         ? "P/N"
@@ -2501,6 +2589,7 @@ async function enrichRecognizedCourseInitial(
   course,
   fallbackSemesterId,
   preferredAcademicUnitCode,
+  userMajorName,
   sectionLookupCache,
 ) {
   const initial = mapRecognizedCourseToDraftInitial(
@@ -2510,7 +2599,7 @@ async function enrichRecognizedCourseInitial(
   const normalizedCourseName = normalizeCourseNameForMatch(initial.name);
   if (!normalizedCourseName) return initial;
 
-  const lookupSemesterIds = [course?.semester, fallbackSemesterId]
+  const lookupSemesterIds = [fallbackSemesterId, course?.semester]
     .map((value) => String(value ?? "").trim())
     .filter((value, index, values) => value && values.indexOf(value) === index);
 
@@ -2528,16 +2617,19 @@ async function enrichRecognizedCourseInitial(
     }
 
     const sections = await sectionLookupCache.get(cacheKey);
-    const matchedSection = sections.find(
+    const matchedSection = findPreferredSection(
+      sections,
       (section) =>
         normalizeCourseNameForMatch(section.name) === normalizedCourseName,
+      preferredAcademicUnitCode,
     );
     if (!matchedSection) continue;
 
     const matchedCredits = Number(matchedSection.credits);
-    const matchedArea = inferCourseArea(
-      matchedSection.category,
-      matchedSection.completionCategory,
+    const matchedArea = resolveCourseAreaForUser(
+      matchedSection,
+      preferredAcademicUnitCode,
+      userMajorName,
     );
     const hasSupportedInitialArea = [
       ...courseAreaOptions,
@@ -2593,6 +2685,7 @@ function completedCourseRequest(values, fallbackSemesterId) {
 function MyCoursesPage({
   semesterId,
   preferredAcademicUnitCode,
+  userMajorName,
   onTimetable,
   onMyPage,
 }) {
@@ -2737,6 +2830,7 @@ function MyCoursesPage({
             course,
             semesterId,
             preferredAcademicUnitCode,
+            userMajorName,
             sectionLookupCache,
           ),
         ),
@@ -2826,6 +2920,7 @@ function MyCoursesPage({
               initial={draft.initial}
               semesterId={semesterId}
               preferredAcademicUnitCode={preferredAcademicUnitCode}
+              userMajorName={userMajorName}
               onSave={(values) => saveCourse(draft, values)}
               onCancel={() =>
                 setDrafts((current) =>
@@ -4131,6 +4226,7 @@ export default function App() {
       <MyCoursesPage
         semesterId={currentSemesterId}
         preferredAcademicUnitCode={user?.departmentCode}
+        userMajorName={user?.major}
         onTimetable={() => setCurrentTab("timetable")}
         onMyPage={() => setCurrentTab("mypage")}
       />

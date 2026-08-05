@@ -111,6 +111,15 @@ function saveTutorialCompletion(profile) {
 }
 
 function mapUserProfile(profile, fallback = {}) {
+  const primaryProgram = profile?.academicPrograms?.find(
+    (program) => program.role === "PRIMARY",
+  );
+
+  const secondaryProgram = profile?.academicPrograms?.find(
+    (program) =>
+      program.role === "DOUBLE_MAJOR" || program.role === "MINOR",
+  );
+
   return {
     ...fallback,
     id: profile?.id ?? fallback.id,
@@ -118,24 +127,54 @@ function mapUserProfile(profile, fallback = {}) {
     studentId:
       profile?.studentNumber ?? fallback.studentId ?? "",
     grade: profile?.grade ?? fallback.grade ?? 1,
-    major: profile?.department ?? fallback.major ?? "",
+
+    major:
+      primaryProgram?.academicUnitName ??
+      profile?.department ??
+      fallback.major ??
+      "",
+
     departmentCode:
-      profile?.departmentId ?? fallback.departmentCode ?? "",
+      primaryProgram?.academicUnitCode ??
+      profile?.departmentId ??
+      fallback.departmentCode ??
+      "",
+
     collegeName: fallback.collegeName ?? "",
+
     admissionYear:
       profile?.admissionYear ?? fallback.admissionYear ?? null,
+
     studentType:
       profile?.studentType ?? fallback.studentType ?? "",
+
     programPath:
       profile?.programPath ?? fallback.programPath ?? "",
-    profileCompleted:
-      profile?.profileCompleted ?? fallback.profileCompleted ?? false,
+
+    secondaryMajor:
+      secondaryProgram?.academicUnitName ??
+      fallback.secondaryMajor ??
+      "",
+
+    secondaryDepartmentCode:
+      secondaryProgram?.academicUnitCode ??
+      fallback.secondaryDepartmentCode ??
+      "",
+
     graduationProfileCompleted:
       profile?.graduationProfileCompleted ??
       fallback.graduationProfileCompleted ??
       false,
+
+    profileCompleted:
+      profile?.profileCompleted ??
+      fallback.profileCompleted ??
+      false,
+
     tutorialCompleted:
-      profile?.tutorialCompleted ?? fallback.tutorialCompleted ?? false,
+      profile?.tutorialCompleted ??
+      fallback.tutorialCompleted ??
+      false,
   };
 }
 
@@ -4205,6 +4244,7 @@ export default function App() {
             name: info.name,
             grade: info.grade,
             departmentId: info.departmentCode,
+            academicPrograms: info.academicPrograms,
             programPath: info.programPath,
             admissionYear:
               Number(String(info.studentId ?? "").slice(0, 4)) || undefined,
@@ -4321,6 +4361,7 @@ export default function App() {
             name: updatedUser.name,
             grade: updatedUser.grade,
             departmentId: updatedUser.departmentCode,
+            academicPrograms: updatedUser.academicPrograms,
             programPath: updatedUser.programPath,
             admissionYear:
               Number(String(updatedUser.studentId ?? "").slice(0, 4)) ||

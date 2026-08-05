@@ -62,6 +62,24 @@ export default function SignupInfoPage({
         secondaryDepartmentCode: secondaryMajor?.code ?? "",
         secondaryCollegeName: secondaryMajor?.collegeName ?? "",
         grade,
+
+        academicPrograms: [
+          {
+            academicUnitCode: major.code,
+            role: "PRIMARY",
+          },
+          ...(secondaryMajor?.code
+            ? [
+                {
+                  academicUnitCode: secondaryMajor.code,
+                  role:
+                    programPath === "DOUBLE_MAJOR"
+                      ? "DOUBLE_MAJOR"
+                      : "MINOR",
+                },
+              ]
+            : []),
+        ],
       });
     } catch (error) {
       setSubmitError(

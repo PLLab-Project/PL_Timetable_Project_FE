@@ -170,6 +170,24 @@ export default function MyAccountInfo({
         secondaryDepartmentCode: secondaryDepartment?.code ?? "",
         secondaryCollegeName: secondaryDepartment?.collegeName ?? "",
         grade: parseInt(grade, 10) || user.grade,
+
+        academicPrograms: [
+          {
+            academicUnitCode: department.code,
+            role: "PRIMARY",
+          },
+          ...(secondaryDepartment?.code
+            ? [
+                {
+                  academicUnitCode: secondaryDepartment.code,
+                  role: 
+                    programPath === "DOUBLE_MAJOR"
+                      ? "DOUBLE_MAJOR"
+                      : "MINOR",
+                },
+              ]
+            : []),
+        ],
       });
       setShowSavedModal(true);
     } catch (error) {

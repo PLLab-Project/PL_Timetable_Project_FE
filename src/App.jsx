@@ -67,6 +67,7 @@ import {
   withdrawCurrentUser,
 } from "./api/users";
 import { useSectionCourses } from "./hooks/useSectionCourses";
+import { Analytics } from "@vercel/analytics/react";
 
 const DAYS = ["월", "화", "수", "목", "금"];
 const TIMES = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
@@ -4910,6 +4911,7 @@ export default function App() {
           }}
         />
       )}
+      <Analytics />
     </main>
   );
 }

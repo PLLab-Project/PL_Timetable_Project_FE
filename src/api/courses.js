@@ -41,3 +41,26 @@ export async function searchCourses(
     items: (data?.items ?? []).map(mapCourse),
   };
 }
+
+export async function getAllCourses(params, signal) {
+  const courses = [];
+  let page = 0;
+  let totalPages = 1;
+
+  while (page < totalPages) {
+    const result = await searchCourses(
+      {
+        ...params,
+        page,
+        size: 100,
+      },
+      signal,
+    );
+
+    courses.push(...(result?.items ?? []));
+    totalPages = Math.max(1, Number(result?.totalPages) || 1);
+    page += 1;
+  }
+
+  return courses;
+}

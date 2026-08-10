@@ -38,7 +38,7 @@ import {
   recognizeCompletedCourses,
   updateCompletedCourse,
 } from "./api/completedCourses";
-import { searchCourses } from "./api/courses";
+import { getAllCourses, searchCourses } from "./api/courses";
 import {
   getAllDepartments,
   getColleges,
@@ -51,6 +51,7 @@ import {
 } from "./api/optimizations";
 import { getAllSections } from "./api/sections";
 import { findLatestSemester, getSemesters } from "./api/semesters";
+import { createReview, getCourseReviews } from "./api/reviews";
 import {
   createTimetable,
   deleteTimetable as deleteServerTimetable,
@@ -120,11 +121,19 @@ function saveTutorialCompletion(profile) {
 }
 
 function mapUserProfile(profile, fallback = {}) {
-  const primaryProgram = profile?.academicPrograms?.find(
+  const academicPrograms =
+    profile?.academicPrograms ?? fallback.academicPrograms ?? [];
+  const activeAcademicPrograms = academicPrograms
+    .filter((program) => !program.status || program.status === "ACTIVE")
+    .sort(
+      (first, second) =>
+        (first.displayOrder ?? 0) - (second.displayOrder ?? 0),
+    );
+  const primaryProgram = activeAcademicPrograms.find(
     (program) => program.role === "PRIMARY",
   );
 
-  const secondaryProgram = profile?.academicPrograms?.find(
+  const secondaryProgram = activeAcademicPrograms.find(
     (program) =>
       program.role === "DOUBLE_MAJOR" || program.role === "MINOR",
   );
@@ -159,6 +168,12 @@ function mapUserProfile(profile, fallback = {}) {
 
     programPath:
       profile?.programPath ?? fallback.programPath ?? "",
+
+    academicPrograms,
+
+    preferredAcademicUnitCodes: activeAcademicPrograms
+      .map((program) => program.academicUnitCode)
+      .filter(Boolean),
 
     secondaryMajor:
       secondaryProgram?.academicUnitName ??
@@ -220,6 +235,15 @@ const MAJOR_API_FILTERS = {
   디지털리터러시: { category: "디지털리터러시" },
 };
 
+const LIBERAL_AREA_API_VALUES = {
+  "인간과 소통": "제1영역:인간과소통",
+  "사회와 경제": "제2영역:사회와경제",
+  "과학과 기술": "제3영역:과학과기술",
+  "예술과 문화": "제4영역:예술과문화",
+  "융합과 혁신": "제5영역:융합과혁신",
+  디지털리터러시: "제6영역:AI·디지털리터러시",
+};
+
 function getSectionKey(course) {
   if (!course?.courseCode || !course?.sectionCode) return null;
   return `${course.courseCode}:${course.sectionCode}`;
@@ -250,6 +274,18 @@ function toTimetableSectionRequests(courses) {
   });
 
   return [...sectionsByKey.values()];
+}
+
+function timetableTotalCredits(timetable) {
+  const serverCredits = Number(timetable?.totalCredits);
+  if (Number.isFinite(serverCredits)) return serverCredits;
+
+  const courseCredits = (timetable?.courses ?? []).reduce((total, course) => {
+    const credits = Number(course.credits);
+    return Number.isFinite(credits) ? total + credits : total;
+  }, 0);
+
+  return courseCredits;
 }
 
 function getAvailableTimes(preferredTimes) {
@@ -1171,6 +1207,7 @@ function CourseCard({
   onClick,
   onAdd,
   onRemove,
+  onReviews,
 }) {
   return (
     <article
@@ -1186,31 +1223,45 @@ function CourseCard({
           <h3 className="truncate text-[12px] font-bold leading-[14px]">{course.name}</h3>
           <p className="mt-0.5 text-[10px] font-medium leading-[11px]">{course.professor}</p>
         </div>
-        {removable ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onRemove();
-            }}
-            className="flex shrink-0 items-center gap-0.5 text-[9px] font-semibold text-brand"
-          >
-            <Trash2 size={11} /> 삭제
-          </button>
-        ) : active && !selected ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onAdd();
-            }}
-            className="shrink-0 text-[9px] font-bold text-brand"
-          >
-            + 시간표에 추가
-          </button>
-        ) : selected ? (
-          <span className="shrink-0 text-[9px] font-semibold text-brand">추가됨</span>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {active && course.courseCode && onReviews && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onReviews();
+              }}
+              className="flex items-center gap-0.5 text-[9px] font-semibold text-[#777]"
+            >
+              <Star size={10} /> 리뷰 {course.reviewCount ?? 0}
+            </button>
+          )}
+          {removable ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove();
+              }}
+              className="flex items-center gap-0.5 text-[9px] font-semibold text-brand"
+            >
+              <Trash2 size={11} /> 삭제
+            </button>
+          ) : active && !selected ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onAdd();
+              }}
+              className="text-[9px] font-bold text-brand"
+            >
+              + 시간표에 추가
+            </button>
+          ) : selected ? (
+            <span className="text-[9px] font-semibold text-brand">추가됨</span>
+          ) : null}
+        </div>
       </div>
       <p className="mt-0.5 truncate text-[9px] leading-[10px] text-[#aaa]">{course.time}</p>
       <p className="truncate text-[9px] leading-[10px] text-[#aaa]">강의 {course.room}</p>
@@ -1221,6 +1272,155 @@ function CourseCard({
         </p>
       </div>
     </article>
+  );
+}
+
+function CourseReviewModal({ course, onClose }) {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [rating, setRating] = useState(5);
+  const [content, setContent] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+
+    getCourseReviews(
+      course.courseCode,
+      { semesterId: course.semesterId, size: 50 },
+      controller.signal,
+    )
+      .then((result) => setReviews(result?.items ?? []))
+      .catch((requestError) => {
+        if (requestError.name === "AbortError") return;
+        setError(requestError.message || "리뷰를 불러오지 못했습니다.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [course.courseCode, course.semesterId]);
+
+  const submitReview = async () => {
+    const trimmedContent = content.trim();
+    if (!trimmedContent || saving) return;
+
+    setSaving(true);
+    setError("");
+    try {
+      const saved = await createReview({
+        semesterId: course.semesterId,
+        courseCode: course.courseCode,
+        professor:
+          course.professor && course.professor !== "교수 미정"
+            ? course.professor
+            : null,
+        rating,
+        content: trimmedContent,
+      });
+      setReviews((current) => [saved, ...current]);
+      setContent("");
+    } catch (requestError) {
+      setError(requestError.message || "리뷰를 저장하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="absolute inset-0 z-[70] flex items-center justify-center bg-black/30 px-6"
+      onClick={onClose}
+    >
+      <section
+        className="flex max-h-[78dvh] w-full max-w-[360px] flex-col overflow-hidden rounded-[16px] bg-white shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-start justify-between border-b border-[#eee] px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-[15px] font-bold">{course.name}</h2>
+            <p className="mt-1 text-[10px] text-[#888]">
+              {course.courseCode}-{course.sectionCode} · {course.professor}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="리뷰 닫기">
+            <X size={18} className="text-[#888]" />
+          </button>
+        </header>
+
+        <div className="border-b border-[#eee] px-5 py-4">
+          <div className="flex items-center gap-1" aria-label={`${rating}점`}>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <button
+                type="button"
+                key={value}
+                onClick={() => setRating(value)}
+                aria-label={`${value}점 선택`}
+              >
+                <Star
+                  size={20}
+                  className={
+                    value <= rating
+                      ? "fill-[#f6c900] text-[#f6c900]"
+                      : "text-[#d7d7d7]"
+                  }
+                />
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            placeholder="강의에 대한 리뷰를 입력해주세요."
+            rows={3}
+            className="mt-3 w-full resize-none rounded-[10px] border border-[#ddd] px-3 py-2 text-[11px] leading-4 outline-none focus:border-brand"
+          />
+          <button
+            type="button"
+            onClick={submitReview}
+            disabled={!content.trim() || saving}
+            className="mt-2 h-9 w-full rounded-[10px] bg-brand text-[12px] font-semibold text-white disabled:opacity-40"
+          >
+            {saving ? "저장 중" : "리뷰 등록"}
+          </button>
+          {error && <p className="mt-2 text-[10px] text-red-600">{error}</p>}
+        </div>
+
+        <div className="no-scrollbar min-h-[110px] overflow-y-auto px-5 py-3">
+          {loading && (
+            <p className="py-8 text-center text-[11px] text-[#999]">
+              리뷰를 불러오는 중입니다.
+            </p>
+          )}
+          {!loading && reviews.length === 0 && (
+            <p className="py-8 text-center text-[11px] text-[#999]">
+              아직 등록된 리뷰가 없습니다.
+            </p>
+          )}
+          <div className="space-y-3">
+            {reviews.map((review) => (
+              <article key={review.id} className="border-b border-[#eee] pb-3 last:border-b-0">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-[#555]">
+                    {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
+                  </span>
+                  <span className="text-[9px] text-[#aaa]">
+                    {review.semester}
+                  </span>
+                </div>
+                <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-4 text-[#555]">
+                  {review.content}
+                </p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1363,6 +1563,9 @@ function TimetableSheet({
                 }}
               >
                 {item.name}
+                <span className="ml-1 text-[9px] font-normal text-[#999]">
+                  {displayCredit(timetableTotalCredits(item))}학점
+                </span>
               </button>
             )}
 
@@ -1781,6 +1984,75 @@ function inferCourseArea(category = "", completionCategory = "") {
   return "";
 }
 
+function inferLiberalArea(value) {
+  const normalized = String(value ?? "")
+    .normalize("NFKC")
+    .replace(/\s/g, "");
+  if (!normalized) return "";
+
+  const numberedArea = normalized.match(/제([1-6])영역/);
+  if (numberedArea) {
+    return [
+      "인간과 소통",
+      "사회와 경제",
+      "과학과 기술",
+      "예술과 문화",
+      "융합과 혁신",
+      "디지털리터러시",
+    ][Number(numberedArea[1]) - 1];
+  }
+
+  const aliases = [
+    ["인간과소통", "인간과 소통"],
+    ["사회와경제", "사회와 경제"],
+    ["과학과기술", "과학과 기술"],
+    ["예술과문화", "예술과 문화"],
+    ["융합과혁신", "융합과 혁신"],
+    ["디지털리터러시", "디지털리터러시"],
+    ["AI·디지털리터러시", "디지털리터러시"],
+  ];
+  return aliases.find(([alias]) => normalized.includes(alias))?.[1] || "";
+}
+
+function inferRecognizedCourseArea(course, matchedSection = null) {
+  const liberalCandidates = [
+    course?.liberalArea,
+    course?.liberalAreaCode,
+    matchedSection?.liberalArea,
+    matchedSection?.liberalAreaCode,
+    course?.area,
+    course?.category,
+    matchedSection?.category,
+    course?.completionCategory,
+    matchedSection?.completionCategory,
+    ...(course?.classifications ?? []).flatMap((classification) => [
+      classification?.contextLabel,
+      classification?.completionCategory,
+    ]),
+    ...(matchedSection?.classifications ?? []).flatMap((classification) => [
+      classification?.contextLabel,
+      classification?.completionCategory,
+    ]),
+  ];
+
+  for (const candidate of liberalCandidates) {
+    const liberalArea = inferLiberalArea(candidate);
+    if (liberalArea) return liberalArea;
+  }
+
+  const areaCandidates = [
+    [course?.category, course?.completionCategory],
+    [matchedSection?.category, matchedSection?.completionCategory],
+    [course?.area, course?.category],
+  ];
+  for (const [category, completionCategory] of areaCandidates) {
+    const area = inferCourseArea(category, completionCategory);
+    if (area) return area;
+  }
+
+  return "";
+}
+
 function normalizeAcademicUnitName(value) {
   return String(value ?? "")
     .normalize("NFKC")
@@ -1807,18 +2079,26 @@ function isMajorArea(value) {
   return ["전필", "전선", "전공필수", "전공선택"].includes(normalized);
 }
 
+function preferredAcademicUnitCodes(value) {
+  return (Array.isArray(value) ? value : [value]).filter(Boolean);
+}
+
 function resolveCourseAreaForUser(
   section,
   preferredAcademicUnitCode,
   userMajorName,
 ) {
   const classifications = section?.classifications ?? [];
-  const ownClassification = preferredAcademicUnitCode
-    ? classifications.find(
-        (classification) =>
-          classification.academicUnitCode === preferredAcademicUnitCode,
-      )
-    : null;
+  const preferredCodes = preferredAcademicUnitCodes(
+    preferredAcademicUnitCode,
+  );
+  const ownClassification = preferredCodes
+    .map((code) =>
+      classifications.find(
+        (classification) => classification.academicUnitCode === code,
+      ),
+    )
+    .find(Boolean);
   const ownArea = inferCourseArea(
     section?.category,
     ownClassification?.completionCategory,
@@ -1842,7 +2122,7 @@ function resolveCourseAreaForUser(
   if (categoryBelongsToUserMajor(section?.category, userMajorName)) {
     return isMajorArea(categoryArea) ? categoryArea : "전공선택";
   }
-  if (preferredAcademicUnitCode || userMajorName) return "일반선택";
+  if (preferredCodes.length > 0 || userMajorName) return "일반선택";
 
   return categoryArea;
 }
@@ -1853,16 +2133,22 @@ function findPreferredSection(
   preferredAcademicUnitCode,
 ) {
   const matchedSections = sections.filter(predicate);
-  if (!preferredAcademicUnitCode) return matchedSections[0];
+  const preferredCodes = preferredAcademicUnitCodes(
+    preferredAcademicUnitCode,
+  );
+  if (preferredCodes.length === 0) return matchedSections[0];
 
-  return (
-    matchedSections.find((section) =>
+  for (const preferredCode of preferredCodes) {
+    const preferredSection = matchedSections.find((section) =>
       section.classifications?.some(
         (classification) =>
-          classification.academicUnitCode === preferredAcademicUnitCode,
+          classification.academicUnitCode === preferredCode,
       ),
-    ) ?? matchedSections[0]
-  );
+    );
+    if (preferredSection) return preferredSection;
+  }
+
+  return matchedSections[0];
 }
 
 function CourseInputForm({
@@ -1878,7 +2164,7 @@ function CourseInputForm({
   const [credits, setCredits] = useState(initial?.credits || "");
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedCourse, setSelectedCourse] = useState(() =>
-    initial?.name ? { name: initial.name } : null,
+    initial?.name ? { ...initial } : null,
   );
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -2048,7 +2334,8 @@ function CourseInputForm({
                     setSearchOpen(false);
 
                     if (
-                      !preferredAcademicUnitCode ||
+                      preferredAcademicUnitCodes(preferredAcademicUnitCode)
+                        .length === 0 ||
                       !course.courseCode ||
                       !semesterId
                     ) {
@@ -2266,6 +2553,12 @@ function CourseInputForm({
                 selectedCourse?.semesterId ?? initial?.semesterId ?? null,
               sourceCategory:
                 selectedCourse?.category ?? initial?.sourceCategory ?? null,
+              offeringId:
+                selectedCourse?.offeringId ?? initial?.offeringId ?? null,
+              historicalOfferingId:
+                selectedCourse?.historicalOfferingId ??
+                initial?.historicalOfferingId ??
+                null,
             })
           }
           className="h-[31px] rounded-[11px] bg-brand px-5 text-[12px] font-semibold text-white"
@@ -2333,6 +2626,64 @@ function GraduationProgress({ label, completed, required, detail }) {
           className="h-full rounded-full bg-brand transition-[width]"
           style={{ width: `${progressPercentage(completed, required)}%` }}
         />
+      </div>
+    </div>
+  );
+}
+
+function graduationGapItems(evaluation, keyPrefix = "") {
+  return [
+    ...(evaluation?.creditGaps ?? []).map((gap) => ({
+      key: `${keyPrefix}credit-${gap.code}`,
+      text: `${gap.label} ${displayCredit(gap.missing)}학점`,
+    })),
+    ...(evaluation?.areaGaps ?? []).map((gap) => ({
+      key: `${keyPrefix}area-${gap.area}`,
+      text: `${gap.area} ${
+        numericCredit(gap.missingCourses) > 0
+          ? `${gap.missingCourses}과목`
+          : `${displayCredit(gap.missingCredits)}학점`
+      }`,
+    })),
+    ...(evaluation?.requiredCourseGaps ?? []).map((gap, index) => ({
+      key: `${keyPrefix}course-${gap.course?.courseCode ?? index}`,
+      text: gap.course?.courseName
+        ? `필수과목 ${gap.course.courseName}`
+        : "필수과목 이수 필요",
+    })),
+  ];
+}
+
+function GraduationRecommendations({ title, recommendations = [] }) {
+  if (recommendations.length === 0) return null;
+
+  return (
+    <div className="mt-5 text-[10px]">
+      <h3 className="mb-2 text-[12px] font-bold">{title}</h3>
+      <div className="space-y-2">
+        {recommendations.map((recommendation) => (
+          <article
+            key={`${recommendation.semesterId}-${recommendation.courseCode}`}
+            className="rounded-[9px] bg-[#faf8ff] px-3 py-2"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-semibold text-[#444]">
+                {recommendation.courseName}
+              </span>
+              <span className="shrink-0 text-brand">
+                {displayCredit(recommendation.credits)}학점
+              </span>
+            </div>
+            <p className="mt-1 text-[9px] text-[#888]">
+              {recommendation.courseCode} · {recommendation.sectionCount}개 분반
+            </p>
+            {recommendation.fills?.length > 0 && (
+              <p className="mt-1 break-keep text-[9px] leading-4 text-[#777]">
+                충족 가능: {recommendation.fills.join(", ")}
+              </p>
+            )}
+          </article>
+        ))}
       </div>
     </div>
   );
@@ -2418,26 +2769,12 @@ function GraduationModal({ semesterId, onClose }) {
     },
   ].filter((item) => numericCredit(item.required) > 0);
 
-  const remainingItems = [
-    ...(evaluation?.creditGaps ?? []).map((gap) => ({
-      key: `credit-${gap.code}`,
-      text: `${gap.label} ${displayCredit(gap.missing)}학점`,
-    })),
-    ...(evaluation?.areaGaps ?? []).map((gap) => ({
-      key: `area-${gap.area}`,
-      text: `${gap.area} ${
-        numericCredit(gap.missingCourses) > 0
-          ? `${gap.missingCourses}과목`
-          : `${displayCredit(gap.missingCredits)}학점`
-      }`,
-    })),
-    ...(evaluation?.requiredCourseGaps ?? []).map((gap, index) => ({
-      key: `course-${gap.course?.courseCode ?? index}`,
-      text: gap.course?.courseName
-        ? `필수과목 ${gap.course.courseName}`
-        : "필수과목 이수 필요",
-    })),
-  ];
+  const remainingItems = graduationGapItems(evaluation);
+  const secondaryMajor = evaluation?.secondaryMajor ?? null;
+  const secondaryRemainingItems = graduationGapItems(
+    secondaryMajor,
+    "secondary-",
+  );
 
   return (
     <div
@@ -2557,8 +2894,47 @@ function GraduationModal({ semesterId, onClose }) {
                 )}
               </div>
 
+              <GraduationRecommendations
+                title="이번 학기 추천 과목"
+                recommendations={evaluation.recommendations}
+              />
+
+              {secondaryMajor && (
+                <section className="mt-6 border-t border-[#eee] pt-5 text-[10px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-[12px] font-bold">복수전공 졸업요건</h3>
+                    <span className="truncate text-[10px] font-medium text-brand">
+                      {secondaryMajor.rule?.academicUnit ??
+                        secondaryMajor.rule?.academicUnitKey ??
+                        "복수전공"}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 space-y-3">
+                    {secondaryRemainingItems.length > 0 ? (
+                      secondaryRemainingItems.map((item) => (
+                        <p key={item.key}>· {item.text}</p>
+                      ))
+                    ) : (
+                      <p className="text-[#777]">
+                        {secondaryMajor.areaAndRequiredCoursesSatisfied
+                          ? "자동 판정 가능한 복수전공 영역·필수과목을 충족했습니다."
+                          : "표시할 부족 요건이 없습니다."}
+                      </p>
+                    )}
+                  </div>
+
+                  <GraduationRecommendations
+                    title="복수전공 추천 과목"
+                    recommendations={secondaryMajor.recommendations}
+                  />
+                </section>
+              )}
+
               {(evaluation.nonAutomaticItems?.length > 0 ||
-                evaluation.warnings?.length > 0) && (
+                evaluation.warnings?.length > 0 ||
+                secondaryMajor?.nonAutomaticItems?.length > 0 ||
+                secondaryMajor?.warnings?.length > 0) && (
                 <div className="mt-5 rounded-[10px] bg-[#faf8ff] p-3 text-[9px] leading-4 text-[#777]">
                   <h3 className="mb-1 text-[10px] font-semibold text-[#555]">
                     추가 확인 필요
@@ -2568,6 +2944,16 @@ function GraduationModal({ semesterId, onClose }) {
                   ))}
                   {evaluation.warnings?.map((warning) => (
                     <p key={warning.code}>· {warning.message}</p>
+                  ))}
+                  {secondaryMajor?.nonAutomaticItems?.map((item) => (
+                    <p key={`secondary-${item.code}`}>
+                      · 복수전공: {item.title}
+                    </p>
+                  ))}
+                  {secondaryMajor?.warnings?.map((warning) => (
+                    <p key={`secondary-${warning.code}`}>
+                      · 복수전공: {warning.message}
+                    </p>
                   ))}
                 </div>
               )}
@@ -2611,17 +2997,19 @@ function mapCompletedCourse(course) {
 }
 
 function mapRecognizedCourseToDraftInitial(course, fallbackSemesterId) {
+  const matchedSection = course?.matchedSection ?? null;
+  const sourceCategory =
+    course?.category || matchedSection?.category || course?.area || "";
   const hasRecognizedCredits =
-    course?.credits !== null &&
-    course?.credits !== undefined &&
-    course?.credits !== "";
+    (course?.credits ?? matchedSection?.credits) !== null &&
+    (course?.credits ?? matchedSection?.credits) !== undefined &&
+    (course?.credits ?? matchedSection?.credits) !== "";
+  const creditValue = course?.credits ?? matchedSection?.credits;
   const recognizedCredits = hasRecognizedCredits
-    ? Number(course.credits)
+    ? Number(creditValue)
     : Number.NaN;
   const gradingBasis = course?.gradingBasis || "LETTER";
-  const inferredArea =
-    inferCourseArea(course?.area) ||
-    inferCourseArea(course?.category, course?.category);
+  const inferredArea = inferRecognizedCourseArea(course, matchedSection);
 
   return {
     name: String(course?.courseName ?? "").trim(),
@@ -2630,14 +3018,18 @@ function mapRecognizedCourseToDraftInitial(course, fallbackSemesterId) {
       gradingBasis === "PASS_FAIL"
         ? "P/N"
         : hasRecognizedCredits
-          ? formatCourseCredits(course.credits)
+          ? formatCourseCredits(creditValue)
           : "",
     actualCredits: Number.isFinite(recognizedCredits)
       ? recognizedCredits
       : 0,
-    courseCode: null,
-    semesterId: course?.semester || fallbackSemesterId || null,
-    sourceCategory: course?.category || null,
+    courseCode: matchedSection?.courseCode ?? null,
+    sectionCode: matchedSection?.sectionCode ?? null,
+    offeringId: matchedSection?.offeringId ?? null,
+    historicalOfferingId: matchedSection?.historicalOfferingId ?? null,
+    semesterId:
+      course?.semester || matchedSection?.semesterId || fallbackSemesterId || null,
+    sourceCategory: sourceCategory || null,
     gradingBasis,
     gradeValue: gradingBasis === "PASS_FAIL" ? "P" : "",
     ocrConfidence: course?.confidence ?? null,
@@ -2665,7 +3057,11 @@ async function enrichRecognizedCourseInitial(
   const normalizedCourseName = normalizeCourseNameForMatch(initial.name);
   if (!normalizedCourseName) return initial;
 
-  const lookupSemesterIds = [fallbackSemesterId, course?.semester]
+  const lookupSemesterIds = [
+    initial.semesterId,
+    fallbackSemesterId,
+    course?.semester,
+  ]
     .map((value) => String(value ?? "").trim())
     .filter((value, index, values) => value && values.indexOf(value) === index);
 
@@ -2686,25 +3082,31 @@ async function enrichRecognizedCourseInitial(
     const matchedSection = findPreferredSection(
       sections,
       (section) =>
-        normalizeCourseNameForMatch(section.name) === normalizedCourseName,
+        course?.matchedSection?.courseCode &&
+        course?.matchedSection?.sectionCode
+          ? section.courseCode === course.matchedSection.courseCode &&
+            section.sectionCode === course.matchedSection.sectionCode
+          : normalizeCourseNameForMatch(section.name) === normalizedCourseName,
       preferredAcademicUnitCode,
     );
     if (!matchedSection) continue;
 
     const matchedCredits = Number(matchedSection.credits);
-    const matchedArea = resolveCourseAreaForUser(
-      matchedSection,
-      preferredAcademicUnitCode,
-      userMajorName,
-    );
-    const hasSupportedInitialArea = [
-      ...courseAreaOptions,
-      ...courseLiberalAreaOptions,
-    ].includes(initial.area);
-
+    const matchedArea =
+      inferRecognizedCourseArea(course, matchedSection) ||
+      resolveCourseAreaForUser(
+        matchedSection,
+        preferredAcademicUnitCode,
+        userMajorName,
+      );
+    const resolvedArea =
+      courseLiberalAreaOptions.includes(initial.area) &&
+      matchedArea === "교양선택"
+        ? initial.area
+        : matchedArea || initial.area;
     return {
       ...initial,
-      area: hasSupportedInitialArea ? initial.area : matchedArea || initial.area,
+      area: resolvedArea,
       credits:
         initial.credits ||
         (initial.gradingBasis === "PASS_FAIL"
@@ -2714,12 +3116,23 @@ async function enrichRecognizedCourseInitial(
         initial.actualCredits ||
         (Number.isFinite(matchedCredits) ? matchedCredits : 0),
       courseCode: matchedSection.courseCode || initial.courseCode,
+      sectionCode: course?.detectedFromOcrText
+        ? null
+        : matchedSection.sectionCode || initial.sectionCode,
+      offeringId: course?.detectedFromOcrText
+        ? null
+        : matchedSection.offeringId || initial.offeringId,
+      historicalOfferingId:
+        course?.detectedFromOcrText
+          ? null
+          : matchedSection.historicalOfferingId ||
+            initial.historicalOfferingId,
       semesterId:
         course?.semester ||
         matchedSection.semesterId ||
         initial.semesterId,
       sourceCategory:
-        initial.sourceCategory || matchedSection.category || null,
+        matchedSection.category || initial.sourceCategory || null,
     };
   }
 
@@ -2745,7 +3158,49 @@ function completedCourseRequest(values, fallbackSemesterId) {
     status: "COMPLETED",
     gradingBasis: isPassFail ? "PASS_FAIL" : "LETTER",
     gradeValue: isPassFail ? values.gradeValue || "P" : "",
+    offeringId: values.offeringId || null,
+    historicalOfferingId: values.historicalOfferingId || null,
   };
+}
+
+async function findOmittedOcrCourses(result, fallbackSemesterId) {
+  const semesterId =
+    result?.resolvedSemester || result?.recognizedSemester || fallbackSemesterId;
+  const lines = result?.lines ?? [];
+  if (!semesterId || lines.length === 0) return [];
+
+  const normalizedText = normalizeCourseNameForMatch(lines.join("\n"));
+  if (!normalizedText) return [];
+
+  const recognizedNames = new Set(
+    (result?.recognizedCourses ?? []).map((course) =>
+      normalizeCourseNameForMatch(course?.courseName),
+    ),
+  );
+  const catalogCourses = await getAllCourses({ semesterId });
+
+  return catalogCourses
+    .filter((course) => {
+      const normalizedName = normalizeCourseNameForMatch(course.name);
+      return (
+        normalizedName.length >= 4 &&
+        !recognizedNames.has(normalizedName) &&
+        normalizedText.includes(normalizedName)
+      );
+    })
+    .map((course) => ({
+      courseName: course.name,
+      credits: course.credits,
+      category: course.category,
+      area: null,
+      semester: course.semesterId,
+      confidence: null,
+      meetings: [],
+      matchStatus: "COURSE_MATCHED",
+      matchedSection: null,
+      matchCandidates: [],
+      detectedFromOcrText: true,
+    }));
 }
 
 function MyCoursesPage({
@@ -2879,9 +3334,18 @@ function MyCoursesPage({
 
     try {
       const result = await recognizeCompletedCourses(file);
-      const recognizedCourses = (result?.recognizedCourses ?? []).filter(
+      const structuredCourses = (result?.recognizedCourses ?? []).filter(
         (course) => String(course?.courseName ?? "").trim(),
       );
+      let omittedCourses = [];
+
+      try {
+        omittedCourses = await findOmittedOcrCourses(result, semesterId);
+      } catch {
+        // OCR 구조화 결과는 유지하고, 원문 기반 온라인 강의 보완만 생략합니다.
+      }
+
+      const recognizedCourses = [...structuredCourses, ...omittedCourses];
 
       if (recognizedCourses.length === 0) {
         throw new Error(
@@ -2894,7 +3358,7 @@ function MyCoursesPage({
         recognizedCourses.map((course) =>
           enrichRecognizedCourseInitial(
             course,
-            semesterId,
+            result?.resolvedSemester || semesterId,
             preferredAcademicUnitCode,
             userMajorName,
             sectionLookupCache,
@@ -2915,7 +3379,11 @@ function MyCoursesPage({
       setOcrNotice(
         incompleteCourseCount > 0
           ? `${recognizedCourses.length}개 과목을 인식했습니다. 강의 정보가 없는 ${incompleteCourseCount}개 과목은 영역과 학점을 확인해주세요.`
-          : `${recognizedCourses.length}개 과목을 인식하고 영역과 학점을 자동 입력했습니다. 내용을 확인한 뒤 각각 저장해주세요.`,
+          : `${recognizedCourses.length}개 과목을 인식하고 영역과 학점을 자동 입력했습니다.${
+              omittedCourses.length > 0
+                ? ` 온라인 강의 ${omittedCourses.length}개는 OCR 원문과 강의 목록을 대조해 보완했습니다.`
+                : ""
+            } 내용을 확인한 뒤 각각 저장해주세요.`,
       );
     } catch (error) {
       setRequestError(
@@ -3118,6 +3586,7 @@ export default function App() {
   const [overlay, setOverlay] = useState(null);
   const [filterAnchor, setFilterAnchor] = useState(null);
   const [courseConflict, setCourseConflict] = useState(null);
+  const [reviewCourse, setReviewCourse] = useState(null);
   const [showComplete, setShowComplete] = useState(false);
   const [generatedScheduleCount, setGeneratedScheduleCount] = useState(0);
   const [optimizationLoading, setOptimizationLoading] = useState(false);
@@ -3164,16 +3633,18 @@ export default function App() {
           semesterId: timetable.semesterId ?? currentSemesterId,
           sections,
         });
+    const mapped = mapTimetableResponse(saved, nextCourses);
 
     setTimetables((current) =>
       current.map((item) =>
         item.id === timetable.id
           ? {
               ...item,
-              serverId: saved?.id ?? timetable.serverId,
-              semesterId: saved?.semesterId ?? item.semesterId,
-              totalCredits: saved?.totalCredits,
-              courses: nextCourses,
+              serverId: mapped.serverId ?? timetable.serverId,
+              semesterId: mapped.semesterId ?? item.semesterId,
+              totalCredits: mapped.totalCredits,
+              favorite: mapped.favorite,
+              courses: mapped.courses,
             }
           : item,
       ),
@@ -3457,7 +3928,10 @@ export default function App() {
     () => ({
       semesterId: activeTimetable?.semesterId ?? currentSemesterId,
       query: debouncedQuery,
-      preferredAcademicUnitCode: user?.departmentCode || undefined,
+      preferredAcademicUnitCode:
+        user?.preferredAcademicUnitCodes?.length > 0
+          ? user.preferredAcademicUnitCodes
+          : user?.departmentCode || undefined,
       sort: SORT_API_VALUES[sort] ?? "DEFAULT",
       size: COURSE_PAGE_SIZE,
       ...filterResolution.params,
@@ -3469,6 +3943,7 @@ export default function App() {
       filterResolution.params,
       sort,
       user?.departmentCode,
+      user?.preferredAcademicUnitCodes,
     ],
   );
 
@@ -3807,6 +4282,13 @@ export default function App() {
     try {
       await persistTimetableCourses(activeTimetable, nextCourses);
     } catch (error) {
+      setTimetables((current) =>
+        current.map((item) =>
+          item.id === activeTimetable.id
+            ? { ...item, courses: selectedCourses }
+            : item,
+        ),
+      );
       setTimetableSyncError(
         error.status === 401
           ? "로그인 세션이 없어 강의 추가 내용을 서버에 저장하지 못했습니다."
@@ -3828,6 +4310,13 @@ export default function App() {
     try {
       await persistTimetableCourses(activeTimetable, nextCourses);
     } catch (error) {
+      setTimetables((current) =>
+        current.map((item) =>
+          item.id === activeTimetable.id
+            ? { ...item, courses: selectedCourses }
+            : item,
+        ),
+      );
       setTimetableSyncError(
         error.status === 401
           ? "로그인 세션이 없어 강의 삭제 내용을 서버에 저장하지 못했습니다."
@@ -3933,6 +4422,10 @@ export default function App() {
                 activeTimetable.semesterId ?? currentSemesterId,
               category: categoryFilters,
               targetGrade: preferredGrades.map(String),
+              preferredAcademicUnitCode:
+                user?.preferredAcademicUnitCodes?.length > 0
+                  ? user.preferredAcademicUnitCodes
+                  : user?.departmentCode || undefined,
               sort: "DEFAULT",
             },
             controller.signal,
@@ -4012,6 +4505,12 @@ export default function App() {
             sectionCode: course.sectionCode,
             required: true,
           })),
+          selectedLiberalAreas: liberals
+            .map((liberal) => LIBERAL_AREA_API_VALUES[liberal])
+            .filter(Boolean),
+          prioritizeGraduationRequirements: Boolean(
+            user?.graduationProfileCompleted,
+          ),
         },
         controller.signal,
       );
@@ -4305,7 +4804,11 @@ export default function App() {
     return (
       <MyCoursesPage
         semesterId={currentSemesterId}
-        preferredAcademicUnitCode={user?.departmentCode}
+        preferredAcademicUnitCode={
+          user?.preferredAcademicUnitCodes?.length > 0
+            ? user.preferredAcademicUnitCodes
+            : user?.departmentCode
+        }
         userMajorName={user?.major}
         onTimetable={() => setCurrentTab("timetable")}
         onMyPage={() => setCurrentTab("mypage")}
@@ -4431,6 +4934,9 @@ export default function App() {
               >
                 {activeTimetable?.name ?? "시간표 없음"}{" "}
                 <ChevronDown size={13} strokeWidth={2.5} />
+                <span className="ml-1 text-[10px] font-medium text-[#888]">
+                  {displayCredit(timetableTotalCredits(activeTimetable))}학점
+                </span>
               </button>
             </div>
             <div className="flex items-center gap-2">
@@ -4580,7 +5086,7 @@ export default function App() {
                   setFocusedCourseId(null);
                   setQuery(event.target.value);
                 }}
-                placeholder="과목명, 교수명으로 검색"
+                placeholder="과목명, 교수명, 과목코드·분반 검색"
                 className="w-full bg-transparent text-[9px] outline-none placeholder:text-[#999]"
               />
               <Search size={11} className="text-[#888]" />
@@ -4640,6 +5146,7 @@ export default function App() {
                 removable
                 onClick={() => {}}
                 onRemove={() => removeCourse(focusedCourse.id)}
+                onReviews={() => setReviewCourse(focusedCourse)}
               />
             ) : (
               !filterResolution.issue &&
@@ -4656,6 +5163,7 @@ export default function App() {
                     );
                   }}
                   onAdd={() => addCourse(course)}
+                  onReviews={() => setReviewCourse(course)}
                 />
               ))
             )}
@@ -4849,6 +5357,13 @@ export default function App() {
               </p>
             </section>
           </div>
+        )}
+
+        {reviewCourse && (
+          <CourseReviewModal
+            course={reviewCourse}
+            onClose={() => setReviewCourse(null)}
+          />
         )}
 
         {optimizationError && (

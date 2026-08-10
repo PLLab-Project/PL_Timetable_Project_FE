@@ -81,6 +81,9 @@ export function mapSectionToCourse(section) {
   return {
     id: `${section.semesterId}:${section.courseCode}:${section.sectionCode}`,
     semesterId: section.semesterId,
+    offeringId: section.offeringId,
+    historicalOfferingId: section.historicalOfferingId,
+    sourceType: section.sourceType,
     courseCode: section.courseCode,
     sectionCode: section.sectionCode,
     name: section.courseName,
@@ -124,8 +127,16 @@ export async function getSections(
   signal,
 ) {
   const searchParams = new URLSearchParams();
+  const normalizedQuery = String(query ?? "").trim();
+  const sectionQueryMatch = normalizedQuery.match(
+    /^([A-Za-z0-9]+)-([A-Za-z0-9]+)$/,
+  );
   appendParam(searchParams, "semesterId", semesterId);
-  appendParam(searchParams, "query", query);
+  appendParam(
+    searchParams,
+    "query",
+    sectionQueryMatch ? sectionQueryMatch[1] : normalizedQuery,
+  );
   appendParam(searchParams, "category", category);
   appendParam(searchParams, "academicUnitCode", academicUnitCode);
   appendParam(searchParams, "collegeCode", collegeCode);
@@ -140,16 +151,30 @@ export async function getSections(
   appendParam(searchParams, "credits", credits);
   appendParam(searchParams, "day", day);
   appendParam(searchParams, "sort", sort);
-  appendParam(searchParams, "page", page);
-  appendParam(searchParams, "size", size);
+  appendParam(searchParams, "page", sectionQueryMatch ? 0 : page);
+  appendParam(searchParams, "size", sectionQueryMatch ? 100 : size);
 
   const data = await apiFetch(`/api/v1/sections?${searchParams.toString()}`, {
     signal,
   });
 
+  const mappedItems = (data?.items ?? []).map(mapSectionToCourse);
+  const items = sectionQueryMatch
+    ? mappedItems.filter(
+        (course) =>
+          course.courseCode.toLocaleLowerCase() ===
+            sectionQueryMatch[1].toLocaleLowerCase() &&
+          course.sectionCode.toLocaleLowerCase() ===
+            sectionQueryMatch[2].toLocaleLowerCase(),
+      )
+    : mappedItems;
+
   return {
     ...data,
-    items: (data?.items ?? []).map(mapSectionToCourse),
+    items,
+    page: sectionQueryMatch ? 0 : data?.page,
+    totalPages: sectionQueryMatch ? 1 : data?.totalPages,
+    totalElements: sectionQueryMatch ? items.length : data?.totalElements,
   };
 }
 

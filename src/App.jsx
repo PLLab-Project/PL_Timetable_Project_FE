@@ -68,9 +68,17 @@ import {
 } from "./api/users";
 import { useSectionCourses } from "./hooks/useSectionCourses";
 import { Analytics } from "@vercel/analytics/react";
+import {
+  DEFAULT_TIMETABLE_END_HOUR,
+  getTimetableEndHour,
+  getTimetableHourLabels,
+  getTimetableVerticalStyle,
+  TIMETABLE_DAY_HEADER_HEIGHT,
+  TIMETABLE_MOBILE_HOUR_HEIGHT,
+  TIMETABLE_START_HOUR,
+} from "./utils/timetableGrid";
 
 const DAYS = ["월", "화", "수", "목", "금"];
-const TIMES = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
 const COLORS = ["#F0C92D", "#75C6A8", "#F09A86", "#78A7E8", "#B997E8"];
 const FALLBACK_SEMESTER_ID = "2026-2";
 const COURSE_PAGE_SIZE = 20;
@@ -609,17 +617,19 @@ function downloadTimetableImage(timetable) {
   if (!context) return;
 
   const width = 1200;
-  const height = 1400;
   const margin = 60;
   const gridTop = 180;
   const gridWidth = width - margin * 2;
-  const gridHeight = 1120;
   const timeColumnWidth = 58;
   const dayHeaderHeight = 58;
+  const endHour = getTimetableEndHour(timetable.courses);
+  const rowCount = endHour - TIMETABLE_START_HOUR;
+  const hourHeight = (1120 - dayHeaderHeight) / 10;
+  const gridHeight = dayHeaderHeight + rowCount * hourHeight;
+  const height = gridTop + gridHeight + 100;
   const dayWidth = (gridWidth - timeColumnWidth) / 5;
-  const hourHeight = (gridHeight - dayHeaderHeight) / 10;
   const days = ["월", "화", "수", "목", "금"];
-  const times = ["9", "10", "11", "12", "1", "2", "3", "4", "5", "6"];
+  const times = getTimetableHourLabels(endHour);
 
   canvas.width = width;
   canvas.height = height;
@@ -737,6 +747,7 @@ function downloadTimetableImage(timetable) {
 function Timetable({
   selectedCourses,
   activeCourse,
+  endHour,
   focusedCourseId,
   onCourseClick,
   onToggleCourseLock,
@@ -747,6 +758,9 @@ function Timetable({
   onTimeSelectionStart,
 }) {
   const previewBlocks = getTimetableBlocks(activeCourse, true);
+  const rowCount = Math.max(1, endHour - TIMETABLE_START_HOUR);
+  const slotCount = rowCount * 2;
+  const hourLabels = getTimetableHourLabels(endHour);
   const [draftSelection, setDraftSelection] = useState(null);
   const dragSelectionRef = useRef(null);
   const suppressCourseClickRef = useRef(false);
@@ -755,18 +769,21 @@ function Timetable({
   const getGridPoint = (event, gridElement) => {
     const rect = gridElement.getBoundingClientRect();
     const timeColumnWidth = 13;
-    const dayHeaderHeight = 14;
+    const dayHeaderHeight = TIMETABLE_DAY_HEADER_HEIGHT;
     const contentX = event.clientX - rect.left - timeColumnWidth;
     const contentY = event.clientY - rect.top - dayHeaderHeight;
 
     if (contentX < 0 || contentY < 0) return null;
 
     const dayWidth = (rect.width - timeColumnWidth) / 5;
-    const slotHeight = (rect.height - dayHeaderHeight) / 20;
+    const slotHeight = (rect.height - dayHeaderHeight) / slotCount;
 
     return {
       day: Math.max(0, Math.min(4, Math.floor(contentX / dayWidth))),
-      slot: Math.max(0, Math.min(19, Math.floor(contentY / slotHeight))),
+      slot: Math.max(
+        0,
+        Math.min(slotCount - 1, Math.floor(contentY / slotHeight)),
+      ),
     };
   };
 
@@ -783,9 +800,8 @@ function Timetable({
 
     return {
       left: `calc(13px + ${selection.dayStart} * ((100% - 13px) / 5))`,
-      top: `calc(14px + ${start * 10}% - ${start * 1.4}px)`,
       width: `calc(${selection.dayEnd - selection.dayStart + 1} * ((100% - 13px) / 5))`,
-      height: `calc(${span * 10}% - ${span * 1.4}px)`,
+      ...getTimetableVerticalStyle(start, span, rowCount),
     };
   };
 
@@ -794,9 +810,8 @@ function Timetable({
 
     return {
       left: `calc(13px + ${cell.day} * ((100% - 13px) / 5))`,
-      top: `calc(14px + ${start * 10}% - ${start * 1.4}px)`,
       width: "calc((100% - 13px) / 5)",
-      height: "calc(5% - 0.7px)",
+      ...getTimetableVerticalStyle(start, 0.5, rowCount),
       boxSizing: "border-box",
       backgroundColor: locked
         ? "rgba(118, 84, 232, 0.13)"
@@ -980,21 +995,26 @@ function Timetable({
 
   return (
     <div
-      className="timetable-grid relative mt-2 h-[442px] touch-none select-none overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white"
+      className="timetable-grid relative mt-2 touch-none select-none overflow-hidden rounded-[15px] border border-[#d9d9d9] bg-white"
       onPointerDown={handleGridPointerDown}
       onPointerMove={handleGridPointerMove}
       onPointerUp={handleGridPointerUp}
       onPointerCancel={resetDragSelection}
       onContextMenu={handleGridContextMenu}
     >
-      <div className="grid h-full grid-cols-[13px_repeat(5,1fr)] grid-rows-[14px_repeat(10,minmax(0,1fr))]">
+      <div
+        className="grid grid-cols-[13px_repeat(5,1fr)]"
+        style={{
+          gridTemplateRows: `${TIMETABLE_DAY_HEADER_HEIGHT}px repeat(${rowCount}, var(--timetable-hour-row-height))`,
+        }}
+      >
         <div className="border-b border-[#dedede]" />
         {DAYS.map((day) => (
           <div key={day} className="border-b border-l border-[#dedede] text-center text-[10px] leading-[13px] text-[#999]">
             {day}
           </div>
         ))}
-        {TIMES.map((time, row) => (
+        {hourLabels.map((time, row) => (
           <div key={time} className="contents">
             <div className={`${row === 0 ? "" : "border-t"} border-[#ededed] pr-0.5 pt-1 text-right text-[9px] text-[#999]`}>
               {time}
@@ -1038,9 +1058,12 @@ function Timetable({
                   ? `repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.46) 0 1px, transparent 1px 8px), ${baseColor}`
                   : baseColor,
                 left: `calc(13px + ${block.day} * ((100% - 13px) / 5))`,
-                top: `calc(14px + ${block.start * 10}% - ${block.start * 1.4}px)`,
                 width: "calc((100% - 13px) / 5)",
-                height: `calc(${block.span * 10}% - ${block.span * 1.4}px)`,
+                ...getTimetableVerticalStyle(
+                  block.start,
+                  block.span,
+                  rowCount,
+                ),
               }}
             >
               <p className="timetable-course-title line-clamp-2 text-[9px] font-bold leading-[1.15]">{course.name}</p>
@@ -1074,9 +1097,9 @@ function Timetable({
                 className="pointer-events-none absolute z-[6] overflow-visible"
                 style={{
                   left: "13px",
-                  top: "14px",
+                  top: `${TIMETABLE_DAY_HEADER_HEIGHT}px`,
                   width: "calc(100% - 13px)",
-                  height: "calc(100% - 14px)",
+                  height: `calc(100% - ${TIMETABLE_DAY_HEADER_HEIGHT}px)`,
                 }}
               >
                 <defs>
@@ -1098,9 +1121,9 @@ function Timetable({
                   <rect
                     key={`pattern-${timeCellKey(cell.day, cell.slot)}`}
                     x={`${cell.day * 20}%`}
-                    y={`${cell.slot * 5}%`}
+                    y={`${(cell.slot / slotCount) * 100}%`}
                     width="20%"
-                    height="5%"
+                    height={`${100 / slotCount}%`}
                     fill={`url(#locked-time-pattern-${selection.id})`}
                   />
                 ))}
@@ -1127,9 +1150,12 @@ function Timetable({
             style={{
               backgroundColor: "rgba(118, 84, 232, 0.25)",
               left: `calc(13px + ${block.day} * ((100% - 13px) / 5))`,
-              top: `calc(14px + ${block.start * 10}% - ${block.start * 1.4}px)`,
               width: "calc((100% - 13px) / 5)",
-              height: `calc(${block.span * 10}% - ${block.span * 1.4}px)`,
+              ...getTimetableVerticalStyle(
+                block.start,
+                block.span,
+                rowCount,
+              ),
             }}
           />
         ))}
@@ -3463,6 +3489,18 @@ export default function App() {
 
   const activeCourse =
     courses.find((course) => course.id === activeCourseId) ?? null;
+  const timetableEndHour = useMemo(
+    () =>
+      getTimetableEndHour(
+        [...selectedCourses, activeCourse].filter(Boolean),
+        timeSelections,
+      ),
+    [activeCourse, selectedCourses, timeSelections],
+  );
+  const collapsedSheetTop =
+    509 +
+    (timetableEndHour - DEFAULT_TIMETABLE_END_HOUR) *
+      TIMETABLE_MOBILE_HOUR_HEIGHT;
   const timeFilteredCourses = useMemo(
     () =>
       courses.filter((course) =>
@@ -4419,6 +4457,7 @@ export default function App() {
           <Timetable
             selectedCourses={selectedCourses}
             activeCourse={activeCourse}
+            endHour={timetableEndHour}
             focusedCourseId={focusedCourseId}
             onCourseClick={(course) => {
               setActiveCourseId(null);
@@ -4453,7 +4492,9 @@ export default function App() {
 
         <section
           className="course-sheet absolute bottom-[54px] left-0 right-0 z-10 flex rounded-t-[16px] border-t border-[#e1e1e1] bg-white pb-2 transition-[top] duration-300 ease-out"
-          style={{ top: sheetExpanded ? "275px" : "509px" }}
+          style={{
+            top: sheetExpanded ? "275px" : `${collapsedSheetTop}px`,
+          }}
         >
           <div className="flex min-h-0 w-full flex-col">
           <div

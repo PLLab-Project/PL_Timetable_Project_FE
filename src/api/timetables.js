@@ -59,7 +59,7 @@ function mapMeetingToBlock(meeting) {
   }
 
   const clippedStart = Math.max(startMinutes, 9 * 60);
-  const clippedEnd = Math.min(endMinutes, 19 * 60);
+  const clippedEnd = endMinutes;
   if (clippedEnd <= clippedStart) return null;
 
   return {

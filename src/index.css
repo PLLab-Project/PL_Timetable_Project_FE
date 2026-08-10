@@ -160,6 +160,10 @@
   }
 }
 
+.timetable-grid {
+  --timetable-hour-row-height: 42.8px;
+}
+
 .animate-tutorial-step {
   animation: tutorial-step-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -191,15 +195,21 @@
     position: relative;
     height: calc(100dvh - 48px);
     min-width: 0;
-    overflow: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
     padding: 16px;
     border: 1px solid #e1e1e1;
     border-radius: 18px;
     background: white;
   }
 
+  .timetable-header::-webkit-scrollbar {
+    display: none;
+  }
+
   .timetable-grid {
-    height: calc(100% - 42px);
+    --timetable-hour-row-height: calc((100dvh - 104px) / 10);
+    height: auto;
     min-height: 0;
   }
 

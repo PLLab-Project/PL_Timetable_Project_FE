@@ -58,9 +58,8 @@ function mapSlotToBlock(slot, sourceCourse) {
   }
 
   const gridStart = 9 * 60;
-  const gridEnd = 19 * 60;
   const clippedStart = Math.max(startMinutes, gridStart);
-  const clippedEnd = Math.min(endMinutes, gridEnd);
+  const clippedEnd = endMinutes;
 
   if (clippedEnd <= clippedStart) return null;
 
